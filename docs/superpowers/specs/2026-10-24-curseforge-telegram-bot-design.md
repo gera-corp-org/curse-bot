@@ -20,7 +20,7 @@
 | Получатели | Один канал/чат, задаётся `TELEGRAM_CHAT_ID` |
 | Хостинг | VPS / домашний сервер, постоянный процесс (Docker или systemd) |
 | Формат | Альбом: логотип + до 3 скриншотов, подпись на первой картинке |
-| Определение «нового» | Поиск, отсортированный по дате выхода (`dateReleased`), сравнение с виденными id |
+| Определение «нового» | Поиск, отсортированный по `dateReleased` (это дата **последнего файла**, т.е. по сути «недавно обновлённые»); новый = id ещё не виден **и** проект создан (`dateCreated`) не раньше чем 14 дней назад |
 | Поздняя поддержка версий | Не отслеживается: метки и фильтр — на момент выхода аддона |
 
 ## Источник данных: CurseForge API
@@ -34,16 +34,18 @@
   «extracted from api.curseforge.com/v1/games/1/version-types»): Retail 517,
   Classic Era 67408, TBC 73246, Wrath 73713, Titan 81212, Cata 77522, MoP 79434,
   **Forever 88568**.
-- Новые аддоны: `GET /v1/mods/search?gameId=1&sortField=11&sortOrder=desc&pageSize=50`
-  (`11` = `ModsSearchSortField.ReleasedDate`, подтверждено по instawow).
+- Свежие аддоны: `GET /v1/mods/search?gameId=1&sortField=11&sortOrder=desc&pageSize=50&index=<N>`
+  (`11` = `ModsSearchSortField.ReleasedDate`, подтверждено по instawow). `Mod.dateReleased` —
+  дата последнего файла (instawow использует его как `last_updated`), поэтому в выдаче
+  и новые проекты, и обновления старых; отделяются по `dateCreated`.
 - Используемые поля мода: `id`, `name`, `summary`, `links.websiteUrl`, `authors[].name`,
-  `categories[].name`, `logo.url`, `screenshots[].url`, `dateReleased`,
+  `categories[].name`, `logo.url`, `screenshots[].url`, `dateCreated`, `dateReleased`,
   `latestFilesIndexes[].gameVersionTypeId`.
 
 **Проверить живым запросом (скрипт `scripts/probe.py`, сразу после клиента CurseForge):**
-1. Выдача с `sortField=11` действительно отсортирована по `dateReleased` по убыванию.
-   Если нет — запасной вариант B: `LastUpdated` (3) + фильтр
-   `dateReleased > время прошлой проверки` (согласовать с пользователем).
+1. Выдача с `sortField=11` действительно отсортирована по `dateReleased` по убыванию,
+   и в ней видны обновления старых аддонов (`dateCreated` сильно раньше `dateReleased`) —
+   это подтверждает, что фильтр по `dateCreated` нужен.
 2. Тип 88568 есть в `version-types` и это Forever. Если нет — остановиться и согласовать.
 3. В выдаче один `classId`. Если несколько — согласовать, какой брать.
 
@@ -53,7 +55,7 @@
 curse_bot/
   bot/
     config.py      — настройки из окружения (.env)
-    curseforge.py  — HTTP-клиент CurseForge: search, version-types, classes
+    curseforge.py  — HTTP-клиент CurseForge: search, version-types
     flavors.py     — gameVersionTypeId → группа/метка, фильтр (чистые функции)
     storage.py     — SQLite: виденные id
     formatter.py   — подпись и выбор картинок (чистые функции)
@@ -107,9 +109,16 @@ Telegram Bot API вызывается напрямую через `httpx`, бе�
 и завершиться; виденными их не помечать.
 
 **Цикл:**
-1. `search` (50 штук по убыванию даты выхода).
-2. Новые = id, которых нет в базе; порядок отправки — от старых к новым.
-3. Для каждого нового:
+1. `search` (50 штук по убыванию `dateReleased`). Если вся страница новее сохранённой
+   отметки `last_released` (таблица `meta`) — берём следующую страницу (`index += 50`),
+   не больше 4 страниц; упёрлись в лимит — предупреждение в лог. Нет отметки — только
+   первая страница. После цикла отметка = максимальный `dateReleased` из выдачи
+   (сохраняется и при baseline).
+2. Кандидаты = id, которых нет в базе; порядок отправки — от старых к новым.
+3. Для каждого кандидата (ошибка в обработке одного аддона логируется и не мешает
+   остальным; такой аддон не помечается и повторяется в следующем цикле):
+   - `dateCreated` старше 14 дней → это обновление старого аддона: пометить виденным,
+     не отправлять (нет/не разобрать `dateCreated` → считать новым);
    - вычислить группы версий;
    - не прошёл `FLAVORS` → пометить виденным, не отправлять;
    - иначе отправить; пометить виденным **только после успешной отправки**.
@@ -148,7 +157,9 @@ summary
 | Telegram: 429 | ждать `retry_after`, повторить (до 3 раз) |
 | Telegram: ошибка альбома (картинка не скачалась и т.п.) | fallback: `sendPhoto` с логотипом → `sendMessage` |
 | Telegram: прочие ошибки (неверный chat_id и т.п.) | лог, аддон не помечается виденным, повтор в следующем цикле |
-| Падение процесса | перезапуск Docker (`restart: unless-stopped`) / systemd; состояние в SQLite |
+| Некорректные данные (null-поля, `data` не список, не-JSON) | `CurseForgeError` / пропуск одного аддона с `log.exception`; цикл не падает |
+| Прочие неожиданные исключения в цикле | `log.exception`, сон, следующий цикл |
+| Падение процесса | перезапуск Docker (`restart: unless-stopped`, `init: true`) / systemd; состояние в SQLite |
 
 Логи — stdout, с временем и уровнем.
 
