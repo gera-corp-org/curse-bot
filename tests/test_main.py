@@ -1,26 +1,22 @@
+import logging
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from bot.curseforge import PAGE_SIZE, CurseForgeError
+from bot.curseforge import BATCH_SIZE, CurseForgeError
 from bot.flavors import CLASSIC, FOREVER, build_flavor_map
-from bot.main import MAX_PAGES, NEW_MAX_AGE, SEND_PAUSE, Bot, main
+from bot.main import MAX_BATCHES_PER_CYCLE, PENDING_MAX_AGE, SEND_PAUSE, Bot, main
 from bot.storage import Storage
 from bot.telegram import TelegramError
 
-
 NOW = datetime(2026, 10, 24, 12, 0, tzinfo=UTC)
-RECENT = (NOW - timedelta(hours=1)).isoformat().replace("+00:00", "Z")
-OLD = (NOW - NEW_MAX_AGE - timedelta(days=1)).isoformat().replace("+00:00", "Z")
 
 
-def iso(dt):
-    return dt.isoformat().replace("+00:00", "Z")
-
-
-def mod(mod_id, *type_ids, created=RECENT, released=RECENT):
-    result = {
+def mod(mod_id, *type_ids, game=1, status=4, available=True, files=True):
+    indexes = [{"gameVersionTypeId": t} for t in (type_ids or (517,))] if files else []
+    return {
         "id": mod_id,
+        "gameId": game,
         "name": f"Addon {mod_id}",
         "summary": "",
         "links": {},
@@ -28,23 +24,33 @@ def mod(mod_id, *type_ids, created=RECENT, released=RECENT):
         "categories": [],
         "logo": {"url": f"https://img/{mod_id}.png"},
         "screenshots": [],
-        "latestFilesIndexes": [{"gameVersionTypeId": t} for t in (type_ids or (517,))],
+        "status": status,
+        "isAvailable": available,
+        "latestFilesIndexes": indexes,
     }
-    if created is not None:
-        result["dateCreated"] = created
-    if released is not None:
-        result["dateReleased"] = released
-    return result
+
+
+def new(mod_id, *type_ids, **kwargs):
+    """Аддон на модерации: status 1, isAvailable false."""
+    return mod(mod_id, *type_ids, status=1, available=False, **kwargs)
 
 
 class FakeCurseForge:
-    def __init__(self, *pages):
-        self.pages = list(pages)
-        self.indexes = []
+    def __init__(self, *mods, max_id=None):
+        self.mods = {m["id"]: m for m in mods}
+        self.max_id = max_id
+        self.requests = []
 
-    def latest_released(self, index=0):
-        self.indexes.append(index)
-        return self.pages.pop(0)
+    def get_mods(self, ids):
+        self.requests.append(list(ids))
+        return [self.mods[i] for i in ids if i in self.mods]
+
+    def find_max_id(self):
+        return self.max_id if self.max_id is not None else max(self.mods)
+
+    def add(self, *mods):
+        for m in mods:
+            self.mods[m["id"]] = m
 
 
 class FakeTelegram:
@@ -63,71 +69,241 @@ class FakeTelegram:
         return [caption.split("</b>")[0].removeprefix("🆕 <b>") for caption, _ in self.sent]
 
 
-def make_bot(curseforge, telegram, storage=None, wanted=frozenset(), sleep=lambda seconds: None):
+class Clock:
+    def __init__(self):
+        self.value = NOW
+
+    def __call__(self):
+        return self.value
+
+
+def make_bot(curseforge, telegram=None, storage=None, wanted=frozenset(), sleep=lambda seconds: None, clock=None):
     return Bot(
-        curseforge, telegram, storage or Storage(":memory:"), build_flavor_map([]), wanted, sleep=sleep, now=lambda: NOW
+        curseforge,
+        telegram or FakeTelegram(),
+        storage or Storage(":memory:"),
+        build_flavor_map([]),
+        wanted,
+        sleep=sleep,
+        now=clock or (lambda: NOW),
     )
 
 
-def test_first_run_is_baseline():
-    telegram = FakeTelegram()
-    bot = make_bot(FakeCurseForge([mod(2), mod(1)], [mod(2), mod(1)]), telegram)
-    bot.run_once()
-    bot.run_once()
+def started(*mods, cursor=None, **kwargs):
+    """Бот после baseline: курсор стоит сразу за последним из mods (или на cursor)."""
+    curseforge = FakeCurseForge(*mods)
+    storage = kwargs.setdefault("storage", Storage(":memory:"))
+    storage.set_meta("next_id", str(cursor if cursor is not None else max(curseforge.mods) + 1))
+    return curseforge, make_bot(curseforge, **kwargs), storage
+
+
+def test_first_run_sets_baseline_and_sends_nothing(caplog):
+    curseforge = FakeCurseForge(mod(10), mod(11), max_id=11)
+    telegram, storage = FakeTelegram(), Storage(":memory:")
+    with caplog.at_level(logging.INFO):
+        make_bot(curseforge, telegram, storage).run_once()
+    assert storage.get_meta("next_id") == "12"
+    assert storage.pending() == {}
     assert telegram.sent == []
+    assert curseforge.requests == []
+    assert "baseline: следующий id 12" in caplog.text
 
 
-def test_new_addons_sent_oldest_first_with_pause():
-    telegram = FakeTelegram()
+def test_new_mod_goes_pending_then_sent_once_approved():
+    curseforge, bot, storage = started(mod(10))
+    telegram = bot._telegram
+    curseforge.add(new(11))
+    bot.run_once()
+    assert list(storage.pending()) == [11]
+    assert telegram.sent == []
+    curseforge.mods[11] = mod(11)
+    bot.run_once()
+    assert telegram.names == ["Addon 11"]
+    assert telegram.sent[0][1] == ["https://img/11.png"]
+    assert storage.pending() == {}
+    bot.run_once()
+    assert telegram.names == ["Addon 11"]
+
+
+def test_already_approved_mod_sent_in_same_cycle_in_id_order_with_pause():
     sleeps = []
-    bot = make_bot(FakeCurseForge([mod(1)], [mod(4), mod(3), mod(2), mod(1)]), telegram, sleep=sleeps.append)
+    curseforge, bot, _ = started(mod(10), sleep=sleeps.append)
+    curseforge.add(mod(13), mod(11), mod(12))
     bot.run_once()
-    bot.run_once()
-    assert telegram.names == ["Addon 2", "Addon 3", "Addon 4"]
-    assert telegram.sent[0][1] == ["https://img/2.png"]
+    assert bot._telegram.names == ["Addon 11", "Addon 12", "Addon 13"]
     assert sleeps == [SEND_PAUSE] * 3
 
 
-def test_sent_addon_not_repeated():
-    telegram = FakeTelegram()
-    bot = make_bot(FakeCurseForge([mod(1)], [mod(2), mod(1)], [mod(2), mod(1)]), telegram)
-    for _ in range(3):
-        bot.run_once()
-    assert telegram.names == ["Addon 2"]
-
-
-def test_filtered_addon_marked_seen_without_sending():
-    telegram = FakeTelegram()
-    storage = Storage(":memory:")
-    page = [mod(3, 88568), mod(2, 517)]
-    bot = make_bot(FakeCurseForge([mod(1)], page, page), telegram, storage, wanted=frozenset({FOREVER}))
-    for _ in range(3):
-        bot.run_once()
-    assert telegram.names == ["Addon 3"]
-    assert storage.filter_unseen([2, 3]) == []
-
-
-def test_failed_send_retried_next_cycle():
-    telegram = FakeTelegram(fail_times=1)
-    storage = Storage(":memory:")
-    bot = make_bot(FakeCurseForge([mod(1)], [mod(2), mod(1)], [mod(2), mod(1)]), telegram, storage)
+def test_non_wow_mods_ignored_but_cursor_moves():
+    curseforge, bot, storage = started(mod(10))
+    curseforge.add(mod(11, game=432), mod(12))
     bot.run_once()
+    assert bot._telegram.names == ["Addon 12"]
+    assert storage.get_meta("next_id") == "13"
+
+
+def test_cursor_advances_and_persists():
+    curseforge, bot, storage = started(mod(10))
+    curseforge.add(mod(15))
+    bot.run_once()
+    assert storage.get_meta("next_id") == "16"
+    assert curseforge.requests[0] == list(range(11, 11 + BATCH_SIZE))
+    bot.run_once()
+    assert curseforge.requests[-1] == list(range(16, 16 + BATCH_SIZE))  # без новых — курсор прежний
+    assert storage.get_meta("next_id") == "16"
+
+
+def test_empty_window_keeps_cursor():
+    curseforge, bot, storage = started(mod(10))
+    bot.run_once()
+    assert storage.get_meta("next_id") == "11"
+
+
+def test_catches_up_across_several_windows():
+    curseforge, bot, storage = started(mod(10))
+    ids = [11, 11 + BATCH_SIZE - 1, 11 + 2 * BATCH_SIZE - 5, 11 + 2 * BATCH_SIZE + 20]
+    curseforge.add(*(mod(i) for i in ids))
+    bot.run_once()
+    assert bot._telegram.names == [f"Addon {i}" for i in ids]
+    assert storage.get_meta("next_id") == str(ids[-1] + 1)
+    scan_requests = [r for r in curseforge.requests if len(r) == BATCH_SIZE]
+    assert len(scan_requests) == 3  # 3-е окно не добито до конца — остановились
+
+
+def test_batch_cap_warns_and_continues_next_cycle(caplog):
+    curseforge, bot, storage = started(mod(10))
+    curseforge.add(*(mod(11 + i * BATCH_SIZE + BATCH_SIZE - 1) for i in range(MAX_BATCHES_PER_CYCLE + 3)))
+    with caplog.at_level(logging.WARNING):
+        bot.run_once()
+    assert len([r for r in curseforge.requests if len(r) == BATCH_SIZE]) == MAX_BATCHES_PER_CYCLE
+    assert any(r.levelname == "WARNING" for r in caplog.records)
+    assert storage.get_meta("next_id") == str(11 + MAX_BATCHES_PER_CYCLE * BATCH_SIZE)
+    before = len(bot._telegram.sent)
+    bot.run_once()
+    assert len(bot._telegram.sent) > before
+
+
+@pytest.mark.parametrize("status", [5, 9])
+def test_rejected_or_deleted_removed_without_sending(status):
+    curseforge, bot, storage = started(mod(10))
+    curseforge.add(new(11))
+    bot.run_once()
+    curseforge.mods[11] = mod(11, status=status, available=False)
+    bot.run_once()
+    assert storage.pending() == {}
+    assert bot._telegram.sent == []
+
+
+def test_stale_pending_removed():
+    clock = Clock()
+    curseforge, bot, storage = started(mod(10), clock=clock)
+    curseforge.add(new(11))
+    bot.run_once()
+    clock.value = NOW + PENDING_MAX_AGE - timedelta(minutes=1)
+    bot.run_once()
+    assert list(storage.pending()) == [11]
+    clock.value = NOW + PENDING_MAX_AGE + timedelta(minutes=1)
+    bot.run_once()
+    assert storage.pending() == {}
+    assert bot._telegram.sent == []
+
+
+def test_missing_from_api_kept_then_dropped_when_stale():
+    clock = Clock()
+    curseforge, bot, storage = started(mod(10), clock=clock)
+    curseforge.add(new(11))
+    bot.run_once()
+    del curseforge.mods[11]
+    bot.run_once()
+    assert list(storage.pending()) == [11]
+    clock.value = NOW + PENDING_MAX_AGE + timedelta(minutes=1)
+    bot.run_once()
+    assert storage.pending() == {}
+
+
+def test_filter_mismatch_removed_without_sending():
+    curseforge, bot, storage = started(mod(10), wanted=frozenset({FOREVER}))
+    curseforge.add(mod(11, 517), mod(12, 88568))
+    bot.run_once()
+    assert bot._telegram.names == ["Addon 12"]
+    assert storage.pending() == {}
+
+
+def test_filter_set_and_no_files_yet_keeps_waiting():
+    curseforge, bot, storage = started(mod(10), wanted=frozenset({CLASSIC}))
+    curseforge.add(mod(11, files=False))
+    bot.run_once()
+    assert list(storage.pending()) == [11]
+    curseforge.mods[11] = mod(11, 67408)
+    bot.run_once()
+    assert bot._telegram.names == ["Addon 11"]
+    assert storage.pending() == {}
+
+
+def test_no_filter_sends_even_without_files():
+    curseforge, bot, _ = started(mod(10))
+    curseforge.add(mod(11, files=False))
+    bot.run_once()
+    assert bot._telegram.names == ["Addon 11"]
+
+
+def test_failed_send_stays_pending_and_is_retried():
+    telegram = FakeTelegram(fail_times=1)
+    curseforge, bot, storage = started(mod(10), telegram=telegram)
+    curseforge.add(mod(11))
     bot.run_once()
     assert telegram.names == []
-    assert storage.filter_unseen([2]) == [2]
+    assert list(storage.pending()) == [11]
     bot.run_once()
-    assert telegram.names == ["Addon 2"]
+    assert telegram.names == ["Addon 11"]
+    assert storage.pending() == {}
 
 
-def test_send_latest_ignores_storage_and_filter():
-    telegram = FakeTelegram()
-    storage = Storage(":memory:")
-    bot = make_bot(
-        FakeCurseForge([mod(3, 88568), mod(2), mod(1)]), telegram, storage, wanted=frozenset({CLASSIC})
+def test_bad_mod_does_not_block_others():
+    curseforge, bot, storage = started(mod(10))
+    broken = mod(12)
+    broken["authors"] = 5  # форматирование упадёт с TypeError
+    curseforge.add(mod(11), broken, mod(13))
+    bot.run_once()
+    assert bot._telegram.names == ["Addon 11", "Addon 13"]
+    assert list(storage.pending()) == [12]
+
+
+def test_record_without_id_is_ignored():
+    curseforge, bot, _ = started(mod(10))
+    original = curseforge.get_mods
+    curseforge.get_mods = lambda ids: original(ids) + [{"name": "мусор"}, "строка"]
+    curseforge.add(mod(11))
+    bot.run_once()
+    assert bot._telegram.names == ["Addon 11"]
+
+
+def test_send_latest_collects_approved_wow_backwards_without_touching_storage():
+    far = 11 + 3 * BATCH_SIZE
+    curseforge = FakeCurseForge(
+        mod(11), mod(12), new(13), mod(14, game=432), mod(far, 88568), mod(far + 5)
     )
-    bot.send_latest(2)
-    assert telegram.names == ["Addon 2", "Addon 3"]
-    assert storage.is_empty()
+    telegram, storage = FakeTelegram(), Storage(":memory:")
+    bot = make_bot(curseforge, telegram, storage, wanted=frozenset({CLASSIC}))  # фильтр игнорируется
+    bot.send_latest(3)
+    assert telegram.names == ["Addon 12", f"Addon {far}", f"Addon {far + 5}"]
+    assert storage.get_meta("next_id") is None
+    assert storage.pending() == {}
+
+
+def test_send_latest_starts_from_cursor_when_present():
+    curseforge = FakeCurseForge(mod(11), mod(12))
+    storage = Storage(":memory:")
+    storage.set_meta("next_id", "12")
+    make_bot(curseforge, FakeTelegram(), storage).send_latest(5)
+    assert storage.get_meta("next_id") == "12"
+    assert [i for r in curseforge.requests for i in r if i >= 12] == []
+
+
+def test_send_latest_stops_after_max_windows():
+    curseforge = FakeCurseForge(mod(1), max_id=5 * MAX_BATCHES_PER_CYCLE * BATCH_SIZE)
+    make_bot(curseforge).send_latest(1)
+    assert len(curseforge.requests) == MAX_BATCHES_PER_CYCLE
 
 
 def test_run_forever_survives_curseforge_errors():
@@ -136,12 +312,12 @@ def test_run_forever_survives_curseforge_errors():
 
     calls = []
 
-    class FlakyCurseForge:
-        def latest_released(self, index=0):
+    class Flaky(FakeCurseForge):
+        def find_max_id(self):
             calls.append(1)
             if len(calls) == 1:
                 raise CurseForgeError("CurseForge ответил 503")
-            return [mod(1)]
+            return 5
 
     def sleep(seconds):
         assert seconds == 600
@@ -149,124 +325,10 @@ def test_run_forever_survives_curseforge_errors():
             raise Stop
 
     storage = Storage(":memory:")
-    bot = make_bot(FlakyCurseForge(), FakeTelegram(), storage, sleep=sleep)
+    bot = make_bot(Flaky(), storage=storage, sleep=sleep)
     with pytest.raises(Stop):
         bot.run_forever(600)
-    assert len(calls) == 2
-    assert not storage.is_empty()
-
-
-def test_updated_old_addon_marked_seen_without_sending():
-    telegram = FakeTelegram()
-    storage = Storage(":memory:")
-    page = [mod(3), mod(2, created=OLD)]
-    bot = make_bot(FakeCurseForge([mod(1)], page, page), telegram, storage)
-    for _ in range(3):
-        bot.run_once()
-    assert telegram.names == ["Addon 3"]
-    assert storage.filter_unseen([2, 3]) == []
-
-
-def test_missing_or_bad_created_counts_as_new():
-    telegram = FakeTelegram()
-    bot = make_bot(FakeCurseForge([mod(1)], [mod(3, created="мусор"), mod(2, created=None)]), telegram)
-    bot.run_once()
-    bot.run_once()
-    assert telegram.names == ["Addon 2", "Addon 3"]
-
-
-def full_page(first_id, newest):
-    """PAGE_SIZE аддонов от новых к старым; dateReleased убывает на минуту."""
-    return [
-        mod(first_id + i, released=iso(newest - timedelta(minutes=i)), created=iso(newest - timedelta(minutes=i)))
-        for i in range(PAGE_SIZE)
-    ]
-
-
-def seeded_storage(watermark):
-    storage = Storage(":memory:")
-    storage.mark_seen([1])
-    if watermark:
-        storage.set_meta("last_released", iso(watermark))
-    return storage
-
-
-def test_fetches_next_page_while_watermark_not_reached():
-    curseforge = FakeCurseForge(full_page(1000, NOW), [mod(5, released=iso(NOW - timedelta(days=1)))])
-    telegram = FakeTelegram()
-    storage = seeded_storage(NOW - timedelta(days=2))
-    make_bot(curseforge, telegram, storage).run_once()
-    assert curseforge.indexes == [0, PAGE_SIZE]
-    assert "Addon 5" in telegram.names
-    assert len(telegram.names) == PAGE_SIZE + 1
-
-
-def test_stops_when_watermark_reached():
-    curseforge = FakeCurseForge(full_page(1000, NOW))
-    storage = seeded_storage(NOW - timedelta(minutes=10))  # внутри первой страницы
-    make_bot(curseforge, FakeTelegram(), storage).run_once()
-    assert curseforge.indexes == [0]
-
-
-def test_stops_at_max_pages_with_warning(caplog):
-    pages = [full_page(1000 * (i + 1), NOW) for i in range(MAX_PAGES + 2)]
-    curseforge = FakeCurseForge(*pages)
-    storage = seeded_storage(NOW - timedelta(days=2))
-    with caplog.at_level("WARNING"):
-        make_bot(curseforge, FakeTelegram(), storage).run_once()
-    assert curseforge.indexes == [PAGE_SIZE * i for i in range(MAX_PAGES)]
-    assert any(r.levelname == "WARNING" for r in caplog.records)
-
-
-def test_no_watermark_means_first_page_only():
-    curseforge = FakeCurseForge(full_page(1000, NOW))
-    make_bot(curseforge, FakeTelegram(), seeded_storage(None)).run_once()
-    assert curseforge.indexes == [0]
-
-
-def test_short_page_means_no_more_pages():
-    curseforge = FakeCurseForge([mod(5)])
-    make_bot(curseforge, FakeTelegram(), seeded_storage(NOW - timedelta(days=2))).run_once()
-    assert curseforge.indexes == [0]
-
-
-def test_duplicates_across_pages_sent_once():
-    page1 = full_page(1000, NOW)
-    page2 = [page1[-1], mod(5, released=iso(NOW - timedelta(days=1)))]
-    telegram = FakeTelegram()
-    make_bot(FakeCurseForge(page1, page2), telegram, seeded_storage(NOW - timedelta(days=2))).run_once()
-    assert len(telegram.names) == len(set(telegram.names)) == PAGE_SIZE + 1
-
-
-def test_baseline_stores_watermark():
-    storage = Storage(":memory:")
-    older = iso(NOW - timedelta(hours=5))
-    page = [mod(2, released=iso(NOW)), mod(1, released=older), mod(3, released=None)]
-    make_bot(FakeCurseForge(page), FakeTelegram(), storage).run_once()
-    assert storage.get_meta("last_released") == NOW.isoformat()
-
-
-def test_watermark_advances_after_cycle_and_never_goes_back():
-    storage = seeded_storage(NOW - timedelta(days=1))
-    newer = NOW - timedelta(minutes=5)
-    bot = make_bot(FakeCurseForge([mod(2, released=iso(newer))], [mod(2, released=iso(NOW - timedelta(days=3)))]),
-                   FakeTelegram(), storage)
-    bot.run_once()
-    assert storage.get_meta("last_released") == newer.isoformat()
-    bot.run_once()
-    assert storage.get_meta("last_released") == newer.isoformat()
-
-
-def test_bad_mod_does_not_block_next_ones():
-    broken = mod(3)
-    broken["authors"] = 5  # форматирование упадёт с TypeError
-    telegram = FakeTelegram()
-    storage = Storage(":memory:")
-    bot = make_bot(FakeCurseForge([mod(1)], [mod(4), broken, mod(2)]), telegram, storage)
-    bot.run_once()
-    bot.run_once()
-    assert telegram.names == ["Addon 2", "Addon 4"]
-    assert storage.filter_unseen([3]) == [3]
+    assert storage.get_meta("next_id") == "6"
 
 
 def test_run_forever_survives_unexpected_errors():
@@ -275,18 +337,18 @@ def test_run_forever_survives_unexpected_errors():
 
     calls = []
 
-    class BrokenCurseForge:
-        def latest_released(self, index=0):
+    class Broken(FakeCurseForge):
+        def find_max_id(self):
             calls.append(1)
             if len(calls) == 1:
                 raise RuntimeError("неожиданно")
-            return [mod(1)]
+            return 5
 
     def sleep(seconds):
         if len(calls) >= 2:
             raise Stop
 
-    bot = make_bot(BrokenCurseForge(), FakeTelegram(), sleep=sleep)
+    bot = make_bot(Broken(), sleep=sleep)
     with pytest.raises(Stop):
         bot.run_forever(600)
     assert len(calls) == 2

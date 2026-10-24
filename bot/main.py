@@ -6,7 +6,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
 from bot.config import ConfigError, load_config
-from bot.curseforge import PAGE_SIZE, CurseForgeClient, CurseForgeError, parse_date
+from bot.curseforge import BATCH_SIZE, WOW_GAME_ID, CurseForgeClient, CurseForgeError
 from bot.flavors import Flavor, build_flavor_map, format_flavors, mod_flavors, passes_filter
 from bot.formatter import build_caption, pick_images
 from bot.storage import Storage
@@ -15,9 +15,11 @@ from bot.telegram import TelegramClient, TelegramError
 log = logging.getLogger(__name__)
 
 SEND_PAUSE = 3  # секунд между сообщениями, чтобы не упереться в лимиты Telegram
-NEW_MAX_AGE = timedelta(days=14)  # аддон, созданный раньше, — не новый, а обновление старого
-MAX_PAGES = 4  # сколько страниц выдачи читать за один опрос
-WATERMARK_KEY = "last_released"  # максимальный dateReleased, который бот уже видел
+MAX_BATCHES_PER_CYCLE = 20  # сколько окон по BATCH_SIZE id читать за один опрос
+PENDING_MAX_AGE = timedelta(days=14)  # сколько ждать одобрения/файлов, прежде чем бросить аддон
+CURSOR_KEY = "next_id"  # первый id, который бот ещё не просматривал
+STATUS_APPROVED = 4
+STATUS_GONE = frozenset({5, 9})  # Rejected, Deleted
 
 
 class Bot:
@@ -50,62 +52,87 @@ class Bot:
             self._sleep(interval)
 
     def run_once(self) -> None:
-        mods = _with_ids(self._curseforge.latest_released())
-        if self._storage.is_empty():
-            self._storage.mark_seen(m["id"] for m in mods)
-            log.info("baseline: %d addons", len(mods))
-            self._advance_watermark(mods, None)
+        cursor = self._storage.get_meta(CURSOR_KEY)
+        if cursor is None:
+            next_id = self._curseforge.find_max_id() + 1
+            self._storage.set_meta(CURSOR_KEY, str(next_id))
+            log.info("baseline: следующий id %d", next_id)
             return
+        self._scan_forward(int(cursor))
+        self._process_pending()
 
-        watermark = parse_date(self._storage.get_meta(WATERMARK_KEY))
-        mods = self._fetch_more_pages(mods, watermark)
-        unseen = set(self._storage.filter_unseen([m["id"] for m in mods]))
-        for mod in reversed(mods):  # API отдаёт от новых к старым, а в канал — по порядку выхода
-            if mod["id"] not in unseen:
-                continue
+    def _scan_forward(self, next_id: int) -> None:
+        """Просмотреть новые id окнами; WoW-аддоны попадают в очередь ожидания."""
+        for _ in range(MAX_BATCHES_PER_CYCLE):
+            window_end = next_id + BATCH_SIZE
+            mods = _valid(self._curseforge.get_mods(list(range(next_id, window_end))))
+            if not mods:
+                return
+            wow_ids = [m["id"] for m in mods if m.get("gameId") == WOW_GAME_ID]
+            if wow_ids:
+                self._storage.add_pending(wow_ids, self._now())
+                log.info("найдено новых аддонов WoW: %d", len(wow_ids))
+            top = max(m["id"] for m in mods)
+            next_id = top + 1
+            self._storage.set_meta(CURSOR_KEY, str(next_id))
+            if top < window_end - BATCH_SIZE // 10:  # окно не добито до конца — дальше пока пусто
+                return
+        log.warning("за один опрос прочитано %d окон id, остальное будет в следующем опросе", MAX_BATCHES_PER_CYCLE)
+
+    def _process_pending(self) -> None:
+        pending = self._storage.pending()
+        if not pending:
+            return
+        ids = sorted(pending)
+        by_id = {m["id"]: m for m in _valid(self._curseforge.get_mods(ids))}
+        for mod_id in ids:
             try:
-                self._process(mod)
+                self._process(mod_id, by_id.get(mod_id), pending[mod_id])
             except Exception:
-                log.exception("ошибка при обработке аддона %s, повторю в следующем опросе", mod["id"])
-        self._advance_watermark(mods, watermark)
+                log.exception("ошибка при обработке аддона %s, повторю в следующем опросе", mod_id)
 
-    def _fetch_more_pages(self, mods: list[dict], watermark: datetime | None) -> list[dict]:
-        """Дочитать страницы, пока на последней есть что-то новее watermark; без watermark — только первая."""
-        page, pages, result = mods, 1, list(mods)
-        while watermark is not None and len(page) == PAGE_SIZE:
-            oldest = min((d for d in map(_released, page) if d), default=None)
-            if oldest is None or oldest <= watermark:
-                break
-            if pages >= MAX_PAGES:
-                log.warning("прочитано %d страниц, но граница не достигнута: часть аддонов могла быть пропущена", pages)
-                break
-            page = _with_ids(self._curseforge.latest_released(pages * PAGE_SIZE))
-            pages += 1
-            result += page
-        return _dedupe(result)
-
-    def _process(self, mod: dict) -> None:
-        created = parse_date(mod.get("dateCreated"))
-        if created is not None and created < self._now() - NEW_MAX_AGE:
-            log.info("пропуск %s «%s»: это обновление старого аддона (создан %s)", mod["id"], mod.get("name"), created.date())
-            self._storage.mark_seen([mod["id"]])
+    def _process(self, mod_id: int, mod: dict | None, first_seen: datetime) -> None:
+        expired = self._now() - first_seen > PENDING_MAX_AGE
+        if mod is None:
+            if expired:
+                log.info("пропуск %s: API его не отдаёт дольше %s", mod_id, PENDING_MAX_AGE)
+                self._storage.remove_pending([mod_id])
+            return
+        if mod.get("status") in STATUS_GONE:
+            log.info("пропуск %s «%s»: отклонён или удалён (status %s)", mod_id, mod.get("name"), mod.get("status"))
+            self._storage.remove_pending([mod_id])
+            return
+        if not _approved(mod):
+            if expired:
+                log.info("пропуск %s «%s»: не одобрен за %s", mod_id, mod.get("name"), PENDING_MAX_AGE)
+                self._storage.remove_pending([mod_id])
             return
         flavors = mod_flavors(mod, self._flavor_map)
+        if self._wanted and not flavors:
+            if expired:
+                log.info("пропуск %s «%s»: так и не появилось файлов", mod_id, mod.get("name"))
+                self._storage.remove_pending([mod_id])
+            return  # файлы ещё не загружены — ждём
         if not passes_filter(flavors, self._wanted):
-            log.info("пропуск %s «%s»: версии [%s] не в FLAVORS", mod["id"], mod.get("name"), format_flavors(flavors))
-            self._storage.mark_seen([mod["id"]])
+            log.info("пропуск %s «%s»: версии [%s] не в FLAVORS", mod_id, mod.get("name"), format_flavors(flavors))
+            self._storage.remove_pending([mod_id])
             return
         if self._send(mod, flavors):
-            self._storage.mark_seen([mod["id"]])
-
-    def _advance_watermark(self, mods: list[dict], stored: datetime | None) -> None:
-        newest = max((d for d in map(_released, mods) if d), default=None)
-        if newest is not None and (stored is None or newest > stored):
-            self._storage.set_meta(WATERMARK_KEY, newest.isoformat())
+            self._storage.remove_pending([mod_id])
 
     def send_latest(self, count: int) -> None:
-        """Разово отправить count последних аддонов — без фильтра и без пометки в базе."""
-        for mod in reversed(self._curseforge.latest_released()[:count]):
+        """Разово отправить count последних одобренных аддонов WoW — без фильтра и без изменений в базе."""
+        cursor = self._storage.get_meta(CURSOR_KEY)
+        end = int(cursor) if cursor is not None else self._curseforge.find_max_id() + 1
+        found: list[dict] = []
+        for _ in range(MAX_BATCHES_PER_CYCLE):
+            start = max(end - BATCH_SIZE, 1)
+            mods = _valid(self._curseforge.get_mods(list(range(start, end))))
+            found += [m for m in mods if m.get("gameId") == WOW_GAME_ID and _approved(m)]
+            end = start
+            if len(found) >= count or end <= 1:
+                break
+        for mod in sorted(found, key=lambda m: m["id"])[-count:]:
             self._send(mod, mod_flavors(mod, self._flavor_map))
 
     def _send(self, mod: dict, flavors: list[Flavor]) -> bool:
@@ -119,22 +146,13 @@ class Bot:
         return True
 
 
-def _released(mod: dict) -> datetime | None:
-    return parse_date(mod.get("dateReleased"))
+def _approved(mod: dict) -> bool:
+    return mod.get("status") == STATUS_APPROVED and bool(mod.get("isAvailable"))
 
 
-def _with_ids(mods: list[dict]) -> list[dict]:
-    return [m for m in mods if isinstance(m, dict) and "id" in m]
-
-
-def _dedupe(mods: list[dict]) -> list[dict]:
-    seen: set = set()
-    result = []
-    for m in mods:
-        if m["id"] not in seen:
-            seen.add(m["id"])
-            result.append(m)
-    return result
+def _valid(mods: list[dict]) -> list[dict]:
+    """Только записи, у которых есть целочисленный id: одна кривая запись не должна ломать цикл."""
+    return [m for m in mods if isinstance(m, dict) and isinstance(m.get("id"), int)]
 
 
 def main(argv: list[str] | None = None) -> int:

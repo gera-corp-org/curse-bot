@@ -4,9 +4,8 @@
 """
 import os
 from collections import Counter
-from datetime import UTC, datetime, timedelta
 
-from bot.curseforge import CurseForgeClient, parse_date
+from bot.curseforge import WOW_GAME_ID, CurseForgeClient
 from bot.flavors import KNOWN_TYPES, build_flavor_map, format_flavors, mod_flavors
 
 FOREVER_ID = 88568
@@ -30,31 +29,27 @@ def main() -> None:
             f = flavor_map[t["id"]]
             print(f"  {t['id']:>6} {t.get('name')!r} slug={t.get('slug')!r} → group={f.group} label={f.label!r}")
 
-    mods = curseforge.latest_released()
-    dates = [d for d in (parse_date(m.get("dateReleased")) for m in mods) if d]
-    print(f"== Поиск: {len(mods)} аддонов; по dateReleased убыв.: {dates == sorted(dates, reverse=True)}")
-    if dates:
-        print(f"   от {dates[-1]} до {dates[0]} (запас при опросе раз в 10 мин)")
-    updates_of_old = 0
-    created_recently = 0
-    now = datetime.now(UTC)
-    for m in mods:
-        created, released = parse_date(m.get("dateCreated")), parse_date(m.get("dateReleased"))
-        if created and released and released - created > timedelta(days=7):
-            updates_of_old += 1
-        if created and now - created <= timedelta(days=14):
-            created_recently += 1
-    print(f"== Обновления старых аддонов (dateCreated раньше dateReleased больше чем на 7 дней): {updates_of_old}")
-    print(f"== Созданы за последние 14 дней: {created_recently}")
-    print(f"== classId в выдаче: {dict(Counter(m.get('classId') for m in mods))}")
+    max_id = curseforge.find_max_id()
+    print(f"== Максимальный id аддона: {max_id}")
+    mods = curseforge.get_mods(list(range(max_id - 9999, max_id + 1)))
+    print(f"== Последние 10 000 id: найдено аддонов {len(mods)}")
+    print(f"== Игры (топ-5 по числу аддонов): {Counter(m.get('gameId') for m in mods).most_common(5)}")
+    wow = [m for m in mods if m.get("gameId") == WOW_GAME_ID]
+    print(f"== Аддонов WoW: {len(wow)}")
+    per_day = Counter((m.get("dateCreated") or "?")[:10] for m in wow)
+    print("== WoW по дням создания:")
+    for day, count in sorted(per_day.items()):
+        print(f"  {day} {count}")
+    print(f"== WoW (status, isAvailable): {dict(Counter((m.get('status'), m.get('isAvailable')) for m in wow))}")
+    approved = [m for m in wow if m.get("status") == 4 and m.get("isAvailable")]
     with_forever = sum(
-        1 for m in mods if any(i.get("gameVersionTypeId") == FOREVER_ID for i in m.get("latestFilesIndexes") or [])
+        1 for m in approved if any(i.get("gameVersionTypeId") == FOREVER_ID for i in m.get("latestFilesIndexes") or [])
     )
-    print(f"== Аддонов с файлами под Forever ({FOREVER_ID}): {with_forever}")
-    print("== Первые 5:")
-    for m in mods[:5]:
+    print(f"== Одобренных WoW с файлами под Forever ({FOREVER_ID}): {with_forever} из {len(approved)}")
+    print("== 5 новейших одобренных WoW:")
+    for m in sorted(approved, key=lambda m: m.get("id", 0), reverse=True)[:5]:
         print(
-            f"  {m['id']} {m.get('name')!r} created={m.get('dateCreated')} released={m.get('dateReleased')} [{format_flavors(mod_flavors(m, flavor_map))}]"
+            f"  {m.get('id')} {m.get('name')!r} created={m.get('dateCreated')} [{format_flavors(mod_flavors(m, flavor_map))}]"
             f" logo={bool(m.get('logo'))} screenshots={len(m.get('screenshots') or [])}"
         )
 
