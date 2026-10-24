@@ -52,3 +52,12 @@ def test_network_error():
 
     with pytest.raises(CurseForgeError, match="недоступен"):
         client_with(handler).latest_released()
+
+
+@pytest.mark.parametrize("response", [
+    httpx.Response(200, text="<html>"),
+    httpx.Response(200, json={"oops": 1}),
+])
+def test_malformed_response(response):
+    with pytest.raises(CurseForgeError, match="некорректный"):
+        client_with(lambda request: response).latest_released()

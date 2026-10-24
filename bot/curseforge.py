@@ -35,4 +35,7 @@ class CurseForgeClient:
             raise CurseForgeError("CurseForge ответил 403: неверный или отозванный API-ключ")
         if response.status_code != 200:
             raise CurseForgeError(f"CurseForge ответил {response.status_code}: {response.text[:200]}")
-        return response.json()["data"]
+        try:
+            return response.json()["data"]
+        except (ValueError, KeyError, TypeError) as e:
+            raise CurseForgeError("CurseForge вернул некорректный ответ") from e
