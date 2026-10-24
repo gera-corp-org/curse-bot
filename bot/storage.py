@@ -14,6 +14,7 @@ class Storage:
             " mod_id INTEGER PRIMARY KEY,"
             " seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"
         )
+        self._db.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
         self._db.commit()
 
     def is_empty(self) -> bool:
@@ -30,6 +31,17 @@ class Storage:
 
     def mark_seen(self, mod_ids: Iterable[int]) -> None:
         self._db.executemany("INSERT OR IGNORE INTO seen (mod_id) VALUES (?)", ((i,) for i in mod_ids))
+        self._db.commit()
+
+    def get_meta(self, key: str) -> str | None:
+        row = self._db.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+        return None if row is None else row[0]
+
+    def set_meta(self, key: str, value: str) -> None:
+        self._db.execute(
+            "INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )
         self._db.commit()
 
     def close(self) -> None:

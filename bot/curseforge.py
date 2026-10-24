@@ -1,4 +1,6 @@
 """Клиент CurseForge API — только запросы, нужные боту."""
+from datetime import UTC, datetime
+
 import httpx
 
 API_URL = "https://api.curseforge.com"
@@ -16,11 +18,11 @@ class CurseForgeClient:
         self._headers = {"x-api-key": api_key, "Accept": "application/json"}
         self._http = http or httpx.Client(base_url=API_URL, timeout=30)
 
-    def latest_released(self) -> list[dict]:
-        """Последние вышедшие аддоны WoW, от новых к старым."""
+    def latest_released(self, index: int = 0) -> list[dict]:
+        """Аддоны WoW с недавним релизом (dateReleased — дата последнего файла), от новых к старым; index — смещение страницы."""
         return self._get(
             "/v1/mods/search",
-            {"gameId": WOW_GAME_ID, "sortField": SORT_RELEASED_DATE, "sortOrder": "desc", "pageSize": PAGE_SIZE},
+            {"gameId": WOW_GAME_ID, "sortField": SORT_RELEASED_DATE, "sortOrder": "desc", "pageSize": PAGE_SIZE, "index": index},
         )
 
     def version_types(self) -> list[dict]:
@@ -36,6 +38,20 @@ class CurseForgeClient:
         if response.status_code != 200:
             raise CurseForgeError(f"CurseForge ответил {response.status_code}: {response.text[:200]}")
         try:
-            return response.json()["data"]
+            data = response.json()["data"]
         except (ValueError, KeyError, TypeError) as e:
             raise CurseForgeError("CurseForge вернул некорректный ответ") from e
+        if not isinstance(data, list):
+            raise CurseForgeError("CurseForge вернул некорректный ответ")
+        return data
+
+
+def parse_date(value) -> datetime | None:
+    """ISO-дата CurseForge ("...Z", в т.ч. 7 знаков доли секунды) → aware UTC; None, если не разобрать."""
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)

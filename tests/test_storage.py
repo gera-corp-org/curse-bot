@@ -29,3 +29,20 @@ def test_persists_between_instances(tmp_path):
     storage.mark_seen([7])
     storage.close()
     assert Storage(path).filter_unseen([7, 8]) == [8]
+
+
+def test_meta_roundtrip_and_upsert():
+    storage = Storage(":memory:")
+    assert storage.get_meta("k") is None
+    storage.set_meta("k", "1")
+    storage.set_meta("k", "2")
+    assert storage.get_meta("k") == "2"
+
+
+def test_meta_persists_and_does_not_affect_seen(tmp_path):
+    path = tmp_path / "bot.db"
+    storage = Storage(path)
+    storage.set_meta("k", "v")
+    assert storage.is_empty()
+    storage.close()
+    assert Storage(path).get_meta("k") == "v"
