@@ -359,3 +359,42 @@ def test_send_latest_rejects_non_positive(value):
     with pytest.raises(SystemExit) as exc:
         main(["--send-latest", value])
     assert exc.value.code == 2
+
+
+def test_run_forever_touches_heartbeat_before_and_after_each_cycle(tmp_path):
+    class Stop(Exception):
+        pass
+
+    heartbeat = tmp_path / "heartbeat"
+    seen = []
+
+    class Watching(FakeCurseForge):
+        def find_max_id(self):
+            seen.append(heartbeat.exists())  # файл уже есть до первого цикла
+            raise RuntimeError("сбой цикла не должен мешать heartbeat")
+
+    def sleep(seconds):
+        seen.append(heartbeat.stat().st_mtime_ns)
+        if len(seen) >= 4:
+            raise Stop
+
+    bot = Bot(Watching(), FakeTelegram(), Storage(":memory:"), build_flavor_map([]), frozenset(),
+              sleep=sleep, now=lambda: NOW, heartbeat=heartbeat)
+    with pytest.raises(Stop):
+        bot.run_forever(600)
+    assert seen[0] is True and seen[2] is True
+    assert seen[3] >= seen[1]
+
+
+def test_heartbeat_write_failure_is_logged_not_fatal(tmp_path, caplog):
+    class Stop(Exception):
+        pass
+
+    def sleep(seconds):
+        raise Stop
+
+    bot = Bot(FakeCurseForge(), FakeTelegram(), Storage(":memory:"), build_flavor_map([]), frozenset(),
+              sleep=sleep, now=lambda: NOW, heartbeat=tmp_path / "missing-dir" / "heartbeat")
+    with caplog.at_level(logging.WARNING), pytest.raises(Stop):
+        bot.run_forever(600)
+    assert any("heartbeat" in r.getMessage() for r in caplog.records)

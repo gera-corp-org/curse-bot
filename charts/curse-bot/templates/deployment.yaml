@@ -1,6 +1,13 @@
 {{- if and (not .Values.vault.enabled) (not .Values.existingSecret) }}
 {{- fail "нужен источник секретов: vault.enabled=true или existingSecret" }}
 {{- end }}
+{{- if or (eq (int (.Values.podSecurityContext.runAsUser | default 0)) 0) (eq (int (.Values.podSecurityContext.runAsGroup | default 0)) 0) (not .Values.podSecurityContext.runAsNonRoot) (not .Values.securityContext.runAsNonRoot) }}
+{{- fail "бот не запускается от root: podSecurityContext.runAsUser/runAsGroup должны быть ненулевыми, runAsNonRoot — true" }}
+{{- end }}
+{{- if not .Values.securityContext.readOnlyRootFilesystem }}
+{{- fail "securityContext.readOnlyRootFilesystem должен быть true" }}
+{{- end }}
+{{- $heartbeatAge := .Values.liveness.maxAgeSeconds | default (add (mul 2 (int .Values.config.pollInterval)) 300) }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -46,10 +53,14 @@ spec:
           image: {{ include "curse-bot.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           # Команда задана явно: vault-secrets-webhook оборачивает её в vault-env.
-          command: ["python", "-m", "bot"]
+          command: ["python3", "-m", "bot"]
           env:
             - name: DB_PATH
               value: /data/bot.db
+            {{- if .Values.liveness.enabled }}
+            - name: HEARTBEAT_FILE
+              value: /tmp/heartbeat
+            {{- end }}
             - name: FLAVORS
               value: {{ .Values.config.flavors | quote }}
             - name: POLL_INTERVAL
@@ -70,6 +81,20 @@ spec:
           {{- end }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
+          {{- if .Values.liveness.enabled }}
+          # Без shell в образе проба — сам python3: возраст heartbeat-файла.
+          # Первый цикл (baseline) успевает отметиться задолго до maxAge.
+          livenessProbe:
+            exec:
+              command:
+                - python3
+                - -c
+                - import os, sys, time; sys.exit(time.time() - os.stat("/tmp/heartbeat").st_mtime > {{ $heartbeatAge }})
+            initialDelaySeconds: 60
+            periodSeconds: {{ .Values.liveness.periodSeconds }}
+            timeoutSeconds: 10
+            failureThreshold: {{ .Values.liveness.failureThreshold }}
+          {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:

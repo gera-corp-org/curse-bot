@@ -71,6 +71,39 @@ GitHub Release с автоматическими заметками. Чарт п
 поэтому ArgoCD с `targetRevision: 0.*` не увидит версию без образа. Каждый пуш в
 `master` собирает образ `latest` и `sha-<коммит>`.
 
+## Безопасность
+
+**Образ**:
+- `gcr.io/distroless/python3-debian13:nonroot`: нет shell, пакетного менеджера и `pip`;
+- процесс работает от uid 65532;
+- код и зависимости принадлежат root и доступны только на чтение, байт-код скомпилирован заранее;
+- писать можно только в `/data`;
+- базовые образы закреплены по digest, GitHub Actions — по SHA; обновляет их Dependabot.
+
+**CI**:
+- hadolint проверяет Dockerfile;
+- к образу прикладываются SBOM и provenance;
+- аттестация Sigstore;
+- Trivy отправляет отчёт в GitHub Security, а `CRITICAL` останавливает выпуск: без образа не выйдет и чарт.
+
+Проверить происхождение образа:
+
+```bash
+gh attestation verify oci://ghcr.io/gera-corp-org/curse-bot:0.2.0 -o gera-corp-org
+```
+
+**Под** (чарт):
+- проходит Pod Security `restricted`: `runAsNonRoot`, read-only корень, `drop: ALL`,
+  `seccomp: RuntimeDefault`, без повышения привилегий;
+- `/tmp` в памяти, лимиты памяти и `ephemeral-storage`;
+- токен ServiceAccount монтируется только для vault-env;
+- NetworkPolicy закрывает весь входящий трафик, исходящий разрешён только на DNS и TCP 443;
+- liveness-проба перезапускает контейнер, если цикл опроса завис: смотрит на возраст `/tmp/heartbeat`;
+- чарт отказывается рендериться с uid 0, без `runAsNonRoot` или без read-only корня.
+
+В `docker compose` те же ограничения: `read_only`, `cap_drop: ALL`, `no-new-privileges`,
+лимиты памяти и процессов, healthcheck по heartbeat.
+
 ## Запуск без Docker
 
 ```bash

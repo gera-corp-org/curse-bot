@@ -21,6 +21,7 @@ class Config:
     flavors: frozenset[str]  # пусто — сообщать обо всех версиях
     poll_interval: int
     db_path: Path
+    heartbeat_file: Path | None = None  # файл для liveness-пробы; None — не писать
 
 
 def load_config(env: Mapping[str, str] | None = None) -> Config:
@@ -51,4 +52,5 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
         flavors=flavors,
         poll_interval=poll_interval,
         db_path=Path(env.get("DB_PATH", "").strip() or "data/bot.db"),
+        heartbeat_file=Path(heartbeat) if (heartbeat := env.get("HEARTBEAT_FILE", "").strip()) else None,
     )

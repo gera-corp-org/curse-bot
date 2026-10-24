@@ -66,7 +66,7 @@ curse_bot/
   Dockerfile, docker-compose.yml, .env.example, README.md
 ```
 
-Стек: Python 3.12, `httpx`, `sqlite3` из стандартной библиотеки, `pytest`.
+Стек: Python 3.13 (как в distroless-образе), `httpx`, `sqlite3` из стандартной библиотеки, `pytest`.
 Telegram Bot API вызывается напрямую через `httpx`, без фреймворка.
 
 ## Конфигурация
@@ -79,6 +79,7 @@ Telegram Bot API вызывается напрямую через `httpx`, бе�
 | `FLAVORS` | нет | пусто = все | список групп через запятую: `retail,classic,forever` |
 | `POLL_INTERVAL` | нет | `600` | секунды между циклами |
 | `DB_PATH` | нет | `data/bot.db` | путь к SQLite |
+| `HEARTBEAT_FILE` | нет | — | файл, который бот трогает после каждого цикла (liveness-проба); пусто — не писать |
 
 Неизвестное значение в `FLAVORS` или отсутствие обязательной переменной — ошибка при старте.
 Пустые `POLL_INTERVAL` / `DB_PATH` — значения по умолчанию. Значения с `$` (ключ CurseForge

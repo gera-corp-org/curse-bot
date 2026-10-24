@@ -4,6 +4,7 @@ import logging
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from bot.config import ConfigError, load_config
 from bot.curseforge import BATCH_SIZE, WOW_GAME_ID, CurseForgeClient, CurseForgeError
@@ -32,6 +33,7 @@ class Bot:
         wanted: frozenset[str],
         sleep: Callable[[float], None] = time.sleep,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
+        heartbeat: Path | None = None,
     ):
         self._curseforge = curseforge
         self._telegram = telegram
@@ -40,8 +42,10 @@ class Bot:
         self._wanted = wanted
         self._sleep = sleep
         self._now = now
+        self._heartbeat = heartbeat
 
     def run_forever(self, interval: int) -> None:
+        self._beat()
         while True:
             try:
                 self.run_once()
@@ -49,7 +53,17 @@ class Bot:
                 log.error("%s", e)
             except Exception:
                 log.exception("непредвиденная ошибка в цикле опроса")
+            self._beat()
             self._sleep(interval)
+
+    def _beat(self) -> None:
+        """Отметить, что цикл жив: liveness-проба смотрит на время изменения файла."""
+        if self._heartbeat is None:
+            return
+        try:
+            self._heartbeat.touch()
+        except OSError as e:
+            log.warning("не удалось обновить heartbeat %s: %s", self._heartbeat, e)
 
     def run_once(self) -> None:
         cursor = self._storage.get_meta(CURSOR_KEY)
@@ -189,6 +203,7 @@ def main(argv: list[str] | None = None) -> int:
         Storage(config.db_path),
         build_flavor_map(version_types),
         config.flavors,
+        heartbeat=config.heartbeat_file,
     )
 
     if args.send_latest is not None:

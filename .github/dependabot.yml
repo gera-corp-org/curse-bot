@@ -1,0 +1,21 @@
+# Базовые образы в Dockerfile закреплены по digest, actions — по SHA: без Dependabot
+# они бы так и остались старыми. Python-зависимости обновляются вручную (uv lock),
+# потому что вместе с uv.lock надо пересоздать requirements.txt — CI это проверяет.
+version: 2
+updates:
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "deps(docker)"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "deps(actions)"

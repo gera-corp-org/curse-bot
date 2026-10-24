@@ -49,6 +49,35 @@ config:
   # Секунд между проверками CurseForge.
   pollInterval: 600
 
+# --- liveness по heartbeat ---
+# Бот трогает /tmp/heartbeat после каждого цикла опроса. Если файл не обновлялся
+# дольше maxAgeSeconds (пусто — 2 × pollInterval + 300), цикл считается зависшим
+# и kubelet перезапускает контейнер.
+liveness:
+  enabled: true
+  maxAgeSeconds: ""
+  periodSeconds: 60
+  failureThreshold: 3
+
+# --- сеть ---
+# Входящий трафик запрещён целиком (у бота нет портов). Исходящий — только DNS и
+# TCP 443: CurseForge, Telegram и Vault (vault-env ходит в него из того же контейнера).
+networkPolicy:
+  enabled: true
+  dns:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: kube-system
+    podSelector:
+      matchLabels:
+        k8s-app: kube-dns
+  # Порты наружу, на любые адреса.
+  egressPorts:
+    - port: 443
+      protocol: TCP
+  # Дополнительные правила egress в формате NetworkPolicy (например, Vault на 8200).
+  extraEgress: []
+
 # Дополнительные переменные окружения (список в формате Kubernetes).
 extraEnv: []
 
@@ -98,8 +127,11 @@ resources:
   requests:
     cpu: 10m
     memory: 48Mi
+    ephemeral-storage: 16Mi
   limits:
     memory: 128Mi
+    # корень только для чтения, /tmp — в памяти; лимит страхует от записи в логи без меры
+    ephemeral-storage: 64Mi
 
 nodeSelector: {}
 tolerations: []

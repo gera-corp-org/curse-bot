@@ -58,3 +58,9 @@ def test_blank_optional_values_use_defaults():
     config = load_config({**BASE, "POLL_INTERVAL": "  ", "DB_PATH": " "})
     assert config.poll_interval == 600
     assert config.db_path == Path("data/bot.db")
+
+
+def test_heartbeat_file_optional():
+    assert load_config(BASE).heartbeat_file is None
+    assert load_config({**BASE, "HEARTBEAT_FILE": " "}).heartbeat_file is None
+    assert load_config({**BASE, "HEARTBEAT_FILE": "/tmp/heartbeat"}).heartbeat_file == Path("/tmp/heartbeat")
