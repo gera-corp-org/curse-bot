@@ -113,3 +113,40 @@ def test_non_dict_json_body_is_telegram_error():
 
     with pytest.raises(TelegramError, match="500"):
         make_client(handler).send_addon("cap", [])
+
+
+def test_send_addon_to_other_chat():
+    rec = Recorder(OK)
+    make_client(rec).send_addon("cap", [], chat_id=42)
+    assert rec.calls == [("sendMessage", {"chat_id": 42, "text": "cap", "parse_mode": "HTML"})]
+
+
+def test_send_text():
+    rec = Recorder(OK)
+    make_client(rec).send_text(42, "<b>hi</b>")
+    assert rec.calls == [
+        ("sendMessage", {"chat_id": 42, "text": "<b>hi</b>", "parse_mode": "HTML",
+                         "link_preview_options": {"is_disabled": True}})
+    ]
+
+
+def test_get_updates_long_polls_messages_only():
+    updates = [{"update_id": 7, "message": {"text": "/status"}}]
+    rec = Recorder((200, {"ok": True, "result": updates}))
+    assert make_client(rec).get_updates(offset=5, timeout=30) == updates
+    assert rec.calls == [("getUpdates", {"offset": 5, "timeout": 30, "allowed_updates": ["message"]})]
+
+
+def test_get_updates_without_offset():
+    rec = Recorder((200, {"ok": True, "result": []}))
+    make_client(rec).get_updates(offset=None, timeout=10)
+    assert rec.calls == [("getUpdates", {"timeout": 10, "allowed_updates": ["message"]})]
+
+
+def test_set_my_commands():
+    rec = Recorder((200, {"ok": True, "result": True}))
+    make_client(rec).set_my_commands([("status", "Состояние"), ("help", "Справка")])
+    assert rec.calls == [
+        ("setMyCommands", {"commands": [{"command": "status", "description": "Состояние"},
+                                        {"command": "help", "description": "Справка"}]})
+    ]

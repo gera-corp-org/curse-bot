@@ -1,5 +1,5 @@
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 
 import pytest
 
@@ -7,94 +7,7 @@ from bot.curseforge import BATCH_SIZE, CurseForgeError
 from bot.flavors import CLASSIC, FOREVER, build_flavor_map
 from bot.main import MAX_BATCHES_PER_CYCLE, PENDING_MAX_AGE, SEND_PAUSE, Bot, main
 from bot.storage import Storage
-from bot.telegram import TelegramError
-
-NOW = datetime(2026, 10, 24, 12, 0, tzinfo=UTC)
-
-
-def mod(mod_id, *type_ids, game=1, status=4, available=True, files=True):
-    indexes = [{"gameVersionTypeId": t} for t in (type_ids or (517,))] if files else []
-    return {
-        "id": mod_id,
-        "gameId": game,
-        "name": f"Addon {mod_id}",
-        "summary": "",
-        "links": {},
-        "authors": [],
-        "categories": [],
-        "logo": {"url": f"https://img/{mod_id}.png"},
-        "screenshots": [],
-        "status": status,
-        "isAvailable": available,
-        "latestFilesIndexes": indexes,
-    }
-
-
-def new(mod_id, *type_ids, **kwargs):
-    """Аддон на модерации: status 1, isAvailable false."""
-    return mod(mod_id, *type_ids, status=1, available=False, **kwargs)
-
-
-class FakeCurseForge:
-    def __init__(self, *mods, max_id=None):
-        self.mods = {m["id"]: m for m in mods}
-        self.max_id = max_id
-        self.requests = []
-
-    def get_mods(self, ids):
-        self.requests.append(list(ids))
-        return [self.mods[i] for i in ids if i in self.mods]
-
-    def find_max_id(self):
-        return self.max_id if self.max_id is not None else max(self.mods)
-
-    def add(self, *mods):
-        for m in mods:
-            self.mods[m["id"]] = m
-
-
-class FakeTelegram:
-    def __init__(self, fail_times=0):
-        self.sent = []
-        self.fail_times = fail_times
-
-    def send_addon(self, caption, images):
-        if self.fail_times:
-            self.fail_times -= 1
-            raise TelegramError("sendPhoto: 400 chat not found")
-        self.sent.append((caption, images))
-
-    @property
-    def names(self):
-        return [caption.split("</b>")[0].removeprefix("🆕 <b>") for caption, _ in self.sent]
-
-
-class Clock:
-    def __init__(self):
-        self.value = NOW
-
-    def __call__(self):
-        return self.value
-
-
-def make_bot(curseforge, telegram=None, storage=None, wanted=frozenset(), sleep=lambda seconds: None, clock=None):
-    return Bot(
-        curseforge,
-        telegram or FakeTelegram(),
-        storage or Storage(":memory:"),
-        build_flavor_map([]),
-        wanted,
-        sleep=sleep,
-        now=clock or (lambda: NOW),
-    )
-
-
-def started(*mods, cursor=None, **kwargs):
-    """Бот после baseline: курсор стоит сразу за последним из mods (или на cursor)."""
-    curseforge = FakeCurseForge(*mods)
-    storage = kwargs.setdefault("storage", Storage(":memory:"))
-    storage.set_meta("next_id", str(cursor if cursor is not None else max(curseforge.mods) + 1))
-    return curseforge, make_bot(curseforge, **kwargs), storage
+from tests.fakes import NOW, Clock, FakeCurseForge, FakeTelegram, make_bot, mod, new, started
 
 
 def test_first_run_sets_baseline_and_sends_nothing(caplog):
@@ -398,3 +311,61 @@ def test_heartbeat_write_failure_is_logged_not_fatal(tmp_path, caplog):
     with caplog.at_level(logging.WARNING), pytest.raises(Stop):
         bot.run_forever(600)
     assert any("heartbeat" in r.getMessage() for r in caplog.records)
+
+
+def test_run_once_records_last_cycle_time():
+    _, bot, storage = started(mod(1))
+    bot.run_once()
+    assert storage.get_meta("last_cycle") == NOW.isoformat()
+
+
+def test_baseline_also_records_last_cycle_time():
+    storage = Storage(":memory:")
+    make_bot(FakeCurseForge(mod(1)), storage=storage).run_once()
+    assert storage.get_meta("last_cycle") == NOW.isoformat()
+
+
+def test_channel_send_is_logged_for_status():
+    curseforge, bot, storage = started(mod(1))
+    curseforge.add(mod(2))
+    bot.run_once()
+    assert storage.sent_since(NOW) == 1
+
+
+def test_flavor_override_from_storage_wins_over_config():
+    curseforge, bot, storage = started(mod(1), wanted=frozenset({CLASSIC}))
+    bot.set_wanted(frozenset({FOREVER}))
+    curseforge.add(mod(2, 88568), mod(3, 67408))
+    bot.run_once()
+    assert bot._telegram.names == ["Addon 2"]
+    assert storage.pending() == {}
+
+
+def test_flavor_override_all_and_reset():
+    _, bot, _ = started(mod(1), wanted=frozenset({CLASSIC}))
+    assert bot.wanted() == frozenset({CLASSIC}) and not bot.wanted_overridden()
+    bot.set_wanted(frozenset())
+    assert bot.wanted() == frozenset() and bot.wanted_overridden()
+    bot.set_wanted(None)
+    assert bot.wanted() == frozenset({CLASSIC}) and not bot.wanted_overridden()
+
+
+def test_run_forever_waits_with_given_wait():
+    class Stop(Exception):
+        pass
+
+    waits = []
+
+    def wait(seconds):
+        waits.append(seconds)
+        raise Stop
+
+    _, bot, _ = started(mod(1))
+    with pytest.raises(Stop):
+        bot.run_forever(600, wait=wait)
+    assert waits == [600]
+
+
+def test_latest_approved_returns_newest_approved_wow():
+    _, bot, storage = started(mod(1), new(2), mod(3), mod(4, game=432), mod(5))
+    assert [m["id"] for m in bot.latest_approved(2)] == [3, 5]

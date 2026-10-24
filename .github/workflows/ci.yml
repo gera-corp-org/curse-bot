@@ -54,6 +54,7 @@ jobs:
           helm template t charts/curse-bot --set vault.enabled=false --set existingSecret=s > /dev/null
           helm template t charts/curse-bot --set persistence.enabled=false > /dev/null
           helm template t charts/curse-bot --set liveness.enabled=false --set networkPolicy.enabled=false > /dev/null
+          helm template t charts/curse-bot --set "config.adminIds={1,2}" | grep -q "value: \"1,2\""
           # опасные конфигурации чарт обязан отказаться рендерить
           for args in "--set vault.enabled=false" \
                       "--set podSecurityContext.runAsUser=0" \

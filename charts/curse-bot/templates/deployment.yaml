@@ -65,6 +65,10 @@ spec:
               value: {{ .Values.config.flavors | quote }}
             - name: POLL_INTERVAL
               value: {{ .Values.config.pollInterval | quote }}
+            {{- with .Values.config.adminIds }}
+            - name: TELEGRAM_ADMIN_IDS
+              value: {{ join "," . | quote }}
+            {{- end }}
             {{- if .Values.vault.enabled }}
             {{- range $name, $key := .Values.vault.env }}
             - name: {{ $name }}

@@ -22,6 +22,7 @@ class Config:
     poll_interval: int
     db_path: Path
     heartbeat_file: Path | None = None  # файл для liveness-пробы; None — не писать
+    admin_ids: frozenset[int] = frozenset()  # кому бот отвечает на команды; пусто — команды выключены
 
 
 def load_config(env: Mapping[str, str] | None = None) -> Config:
@@ -45,6 +46,11 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
     if poll_interval <= 0:
         raise ConfigError("POLL_INTERVAL должен быть положительным целым числом секунд")
 
+    try:
+        admin_ids = frozenset(int(i) for i in env.get("TELEGRAM_ADMIN_IDS", "").split(",") if i.strip())
+    except ValueError:
+        raise ConfigError("TELEGRAM_ADMIN_IDS — числовые id пользователей Telegram через запятую") from None
+
     return Config(
         curseforge_api_key=env["CURSEFORGE_API_KEY"].strip(),
         telegram_bot_token=env["TELEGRAM_BOT_TOKEN"].strip(),
@@ -53,4 +59,5 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
         poll_interval=poll_interval,
         db_path=Path(env.get("DB_PATH", "").strip() or "data/bot.db"),
         heartbeat_file=Path(heartbeat) if (heartbeat := env.get("HEARTBEAT_FILE", "").strip()) else None,
+        admin_ids=admin_ids,
     )

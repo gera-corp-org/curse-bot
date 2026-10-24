@@ -64,3 +64,13 @@ def test_heartbeat_file_optional():
     assert load_config(BASE).heartbeat_file is None
     assert load_config({**BASE, "HEARTBEAT_FILE": " "}).heartbeat_file is None
     assert load_config({**BASE, "HEARTBEAT_FILE": "/tmp/heartbeat"}).heartbeat_file == Path("/tmp/heartbeat")
+
+
+def test_admin_ids():
+    assert load_config(BASE).admin_ids == frozenset()
+    assert load_config({**BASE, "TELEGRAM_ADMIN_IDS": " 123, 456 ,"}).admin_ids == frozenset({123, 456})
+
+
+def test_bad_admin_ids():
+    with pytest.raises(ConfigError, match="TELEGRAM_ADMIN_IDS"):
+        load_config({**BASE, "TELEGRAM_ADMIN_IDS": "123,abc"})

@@ -28,18 +28,20 @@ class TelegramClient:
         self._http = http or httpx.Client(base_url=API_URL, timeout=60)
         self._sleep = sleep
 
-    def send_addon(self, caption: str, images: list[str]) -> None:
-        """Альбом → фото логотипа → текст; следующий вариант — только если предыдущий не прошёл."""
+    def send_addon(self, caption: str, images: list[str], chat_id: int | str | None = None) -> None:
+        """Альбом → фото логотипа → текст; следующий вариант — только если предыдущий не прошёл.
+
+        По умолчанию — в канал из настроек; chat_id — в другой чат (ответ на /latest).
+        """
+        chat = self._chat_id if chat_id is None else chat_id
         attempts: list[tuple[str, dict]] = []
         if len(images) >= 2:
             media = [{"type": "photo", "media": url} for url in images]
             media[0].update(caption=caption, parse_mode="HTML")
-            attempts.append(("sendMediaGroup", {"chat_id": self._chat_id, "media": media}))
+            attempts.append(("sendMediaGroup", {"chat_id": chat, "media": media}))
         if images:
-            attempts.append(
-                ("sendPhoto", {"chat_id": self._chat_id, "photo": images[0], "caption": caption, "parse_mode": "HTML"})
-            )
-        attempts.append(("sendMessage", {"chat_id": self._chat_id, "text": caption, "parse_mode": "HTML"}))
+            attempts.append(("sendPhoto", {"chat_id": chat, "photo": images[0], "caption": caption, "parse_mode": "HTML"}))
+        attempts.append(("sendMessage", {"chat_id": chat, "text": caption, "parse_mode": "HTML"}))
 
         error = None
         for method, payload in attempts:
@@ -51,10 +53,28 @@ class TelegramClient:
                 error = e
         raise error
 
-    def _call(self, method: str, payload: dict) -> dict:
+    def send_text(self, chat_id: int | str, text: str) -> None:
+        self._call(
+            "sendMessage",
+            {"chat_id": chat_id, "text": text, "parse_mode": "HTML", "link_preview_options": {"is_disabled": True}},
+        )
+
+    def get_updates(self, offset: int | None, timeout: int) -> list[dict]:
+        """Long polling входящих сообщений: Telegram держит запрос до timeout секунд."""
+        payload: dict = {"timeout": timeout, "allowed_updates": ["message"]}
+        if offset is not None:
+            payload = {"offset": offset, **payload}
+        return self._call("getUpdates", payload, read_timeout=timeout + 15)
+
+    def set_my_commands(self, commands: list[tuple[str, str]]) -> None:
+        """Меню команд в клиенте Telegram."""
+        self._call("setMyCommands", {"commands": [{"command": c, "description": d} for c, d in commands]})
+
+    def _call(self, method: str, payload: dict, read_timeout: float | None = None) -> dict:
         for attempt in range(MAX_429_RETRIES + 1):
             try:
-                response = self._http.post(f"/bot{self._token}/{method}", json=payload)
+                kwargs = {} if read_timeout is None else {"timeout": httpx.Timeout(read_timeout, connect=10)}
+                response = self._http.post(f"/bot{self._token}/{method}", json=payload, **kwargs)
             except httpx.HTTPError as e:
                 # в тексте сетевых ошибок httpx нет URL, так что токен сюда не попадает
                 raise TelegramError(f"{method}: Telegram недоступен: {e}") from e

@@ -6,6 +6,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from bot.commands import Commands
 from bot.config import ConfigError, load_config
 from bot.curseforge import BATCH_SIZE, WOW_GAME_ID, CurseForgeClient, CurseForgeError
 from bot.flavors import Flavor, build_flavor_map, format_flavors, mod_flavors, passes_filter
@@ -19,6 +20,9 @@ SEND_PAUSE = 3  # секунд между сообщениями, чтобы н�
 MAX_BATCHES_PER_CYCLE = 20  # сколько окон по BATCH_SIZE id читать за один опрос
 PENDING_MAX_AGE = timedelta(days=14)  # сколько ждать одобрения/файлов, прежде чем бросить аддон
 CURSOR_KEY = "next_id"  # первый id, который бот ещё не просматривал
+LAST_CYCLE_KEY = "last_cycle"  # когда последний опрос прошёл без ошибок (для /status)
+FLAVORS_KEY = "flavors"  # фильтр версий, заданный командой /flavors; перекрывает FLAVORS из настроек
+ALL_FLAVORS = "*"  # значение FLAVORS_KEY «без фильтра»
 STATUS_APPROVED = 4
 STATUS_GONE = frozenset({5, 9})  # Rejected, Deleted
 
@@ -39,12 +43,14 @@ class Bot:
         self._telegram = telegram
         self._storage = storage
         self._flavor_map = flavor_map
-        self._wanted = wanted
+        self._default_wanted = wanted
         self._sleep = sleep
         self._now = now
         self._heartbeat = heartbeat
 
-    def run_forever(self, interval: int) -> None:
+    def run_forever(self, interval: int, wait: Callable[[float], None] | None = None) -> None:
+        """Опрос раз в interval секунд; между опросами — wait (по умолчанию просто сон)."""
+        wait = wait or self._sleep
         self._beat()
         while True:
             try:
@@ -54,7 +60,7 @@ class Bot:
             except Exception:
                 log.exception("непредвиденная ошибка в цикле опроса")
             self._beat()
-            self._sleep(interval)
+            wait(interval)
 
     def _beat(self) -> None:
         """Отметить, что цикл жив: liveness-проба смотрит на время изменения файла."""
@@ -71,9 +77,37 @@ class Bot:
             next_id = self._curseforge.find_max_id() + 1
             self._storage.set_meta(CURSOR_KEY, str(next_id))
             log.info("baseline: следующий id %d", next_id)
-            return
-        self._scan_forward(int(cursor))
-        self._process_pending()
+        else:
+            self._scan_forward(int(cursor))
+            self._process_pending()
+        self._storage.set_meta(LAST_CYCLE_KEY, self._now().isoformat())
+
+    def cursor(self) -> int | None:
+        """Первый id, который бот ещё не просматривал; None — до baseline."""
+        value = self._storage.get_meta(CURSOR_KEY)
+        return None if value is None else int(value)
+
+    def last_cycle(self) -> datetime | None:
+        """Когда последний опрос прошёл без ошибок."""
+        value = self._storage.get_meta(LAST_CYCLE_KEY)
+        return None if value is None else datetime.fromisoformat(value)
+
+    def wanted(self) -> frozenset[str]:
+        """Действующий фильтр версий: заданный командой /flavors или из настроек."""
+        override = self._storage.get_meta(FLAVORS_KEY)
+        if override is None:
+            return self._default_wanted
+        return frozenset() if override == ALL_FLAVORS else frozenset(override.split(","))
+
+    def wanted_overridden(self) -> bool:
+        return self._storage.get_meta(FLAVORS_KEY) is not None
+
+    def set_wanted(self, wanted: frozenset[str] | None) -> None:
+        """Задать фильтр (пустой — без фильтра); None — вернуть значение из настроек."""
+        if wanted is None:
+            self._storage.delete_meta(FLAVORS_KEY)
+        else:
+            self._storage.set_meta(FLAVORS_KEY, ",".join(sorted(wanted)) or ALL_FLAVORS)
 
     def _scan_forward(self, next_id: int) -> None:
         """Просмотреть новые id окнами; WoW-аддоны попадают в очередь ожидания."""
@@ -97,15 +131,23 @@ class Bot:
         pending = self._storage.pending()
         if not pending:
             return
-        ids = sorted(pending)
-        by_id = {m["id"]: m for m in _valid(self._curseforge.get_mods(ids))}
-        for mod_id in ids:
+        wanted = self.wanted()
+        for mod_id, mod, first_seen in self.pending_mods():
             try:
-                self._process(mod_id, by_id.get(mod_id), pending[mod_id])
+                self._process(mod_id, mod, first_seen, wanted)
             except Exception:
                 log.exception("ошибка при обработке аддона %s, повторю в следующем опросе", mod_id)
 
-    def _process(self, mod_id: int, mod: dict | None, first_seen: datetime) -> None:
+    def pending_mods(self) -> list[tuple[int, dict | None, datetime]]:
+        """Очередь ожидания по возрастанию id: (id, свежие данные из API или None, когда впервые увиден)."""
+        pending = self._storage.pending()
+        if not pending:
+            return []
+        ids = sorted(pending)
+        by_id = {m["id"]: m for m in _valid(self._curseforge.get_mods(ids))}
+        return [(mod_id, by_id.get(mod_id), pending[mod_id]) for mod_id in ids]
+
+    def _process(self, mod_id: int, mod: dict | None, first_seen: datetime, wanted: frozenset[str]) -> None:
         expired = self._now() - first_seen > PENDING_MAX_AGE
         if mod is None:
             if expired:
@@ -122,20 +164,26 @@ class Bot:
                 self._storage.remove_pending([mod_id])
             return
         flavors = mod_flavors(mod, self._flavor_map)
-        if self._wanted and not flavors:
+        if wanted and not flavors:
             if expired:
                 log.info("пропуск %s «%s»: так и не появилось файлов", mod_id, mod.get("name"))
                 self._storage.remove_pending([mod_id])
             return  # файлы ещё не загружены — ждём
-        if not passes_filter(flavors, self._wanted):
+        if not passes_filter(flavors, wanted):
             log.info("пропуск %s «%s»: версии [%s] не в FLAVORS", mod_id, mod.get("name"), format_flavors(flavors))
             self._storage.remove_pending([mod_id])
             return
         if self._send(mod, flavors):
             self._storage.remove_pending([mod_id])
+            self._storage.record_sent(mod_id, self._now())
 
     def send_latest(self, count: int) -> None:
         """Разово отправить count последних одобренных аддонов WoW — без фильтра и без изменений в базе."""
+        for mod in self.latest_approved(count):
+            self._send(mod, mod_flavors(mod, self._flavor_map))
+
+    def latest_approved(self, count: int) -> list[dict]:
+        """count последних одобренных аддонов WoW (от старых к новым), просмотром id назад от курсора."""
         cursor = self._storage.get_meta(CURSOR_KEY)
         end = int(cursor) if cursor is not None else self._curseforge.find_max_id() + 1
         found: list[dict] = []
@@ -146,8 +194,11 @@ class Bot:
             end = start
             if len(found) >= count or end <= 1:
                 break
-        for mod in sorted(found, key=lambda m: m["id"])[-count:]:
-            self._send(mod, mod_flavors(mod, self._flavor_map))
+        return sorted(found, key=lambda m: m["id"])[-count:]
+
+    def render(self, mod: dict) -> tuple[str, list[str]]:
+        """Подпись и картинки для сообщения об аддоне."""
+        return build_caption(mod, mod_flavors(mod, self._flavor_map)), pick_images(mod)
 
     def _send(self, mod: dict, flavors: list[Flavor]) -> bool:
         try:
@@ -197,10 +248,12 @@ def main(argv: list[str] | None = None) -> int:
         log.warning("типы версий не загружены (%s), использую встроенный список", e)
         version_types = []
 
+    telegram = TelegramClient(config.telegram_bot_token, config.telegram_chat_id)
+    storage = Storage(config.db_path)
     bot = Bot(
         curseforge,
-        TelegramClient(config.telegram_bot_token, config.telegram_chat_id),
-        Storage(config.db_path),
+        telegram,
+        storage,
         build_flavor_map(version_types),
         config.flavors,
         heartbeat=config.heartbeat_file,
@@ -217,5 +270,12 @@ def main(argv: list[str] | None = None) -> int:
     log.info(
         "старт: опрос каждые %d с, FLAVORS=%s", config.poll_interval, ",".join(sorted(config.flavors)) or "все"
     )
-    bot.run_forever(config.poll_interval)
+    if config.admin_ids:
+        commands = Commands(bot, telegram, storage, config.admin_ids)
+        commands.register_menu()
+        log.info("команды в Telegram включены для %d пользователей", len(config.admin_ids))
+        bot.run_forever(config.poll_interval, wait=commands.wait)
+    else:
+        log.info("команды в Telegram выключены: TELEGRAM_ADMIN_IDS пуст")
+        bot.run_forever(config.poll_interval)
     return 0

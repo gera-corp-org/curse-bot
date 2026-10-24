@@ -54,3 +54,13 @@ def test_meta_roundtrip_and_upsert():
     storage.set_meta("k", "1")
     storage.set_meta("k", "2")
     assert storage.get_meta("k") == "2"
+
+
+def test_sent_log_counts_since():
+    storage = Storage(":memory:")
+    now = datetime(2026, 10, 24, 12, 0, tzinfo=UTC)
+    storage.record_sent(1, now - timedelta(hours=30))
+    storage.record_sent(2, now - timedelta(hours=2))
+    storage.record_sent(3, now)
+    assert storage.sent_since(now - timedelta(hours=24)) == 2
+    assert storage.sent_since(now + timedelta(seconds=1)) == 0

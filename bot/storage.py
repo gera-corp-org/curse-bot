@@ -12,6 +12,7 @@ class Storage:
         self._db = sqlite3.connect(path)
         self._db.execute("CREATE TABLE IF NOT EXISTS pending (mod_id INTEGER PRIMARY KEY, first_seen TEXT NOT NULL)")
         self._db.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        self._db.execute("CREATE TABLE IF NOT EXISTS sent (mod_id INTEGER NOT NULL, sent_at TEXT NOT NULL)")
         self._db.commit()
 
     def add_pending(self, mod_ids: Iterable[int], first_seen: datetime) -> None:
@@ -29,6 +30,15 @@ class Storage:
         self._db.executemany("DELETE FROM pending WHERE mod_id = ?", ((i,) for i in mod_ids))
         self._db.commit()
 
+    def record_sent(self, mod_id: int, at: datetime) -> None:
+        """Журнал публикаций в канал — для /status."""
+        self._db.execute("INSERT INTO sent (mod_id, sent_at) VALUES (?, ?)", (mod_id, at.astimezone(UTC).isoformat()))
+        self._db.commit()
+
+    def sent_since(self, since: datetime) -> int:
+        row = self._db.execute("SELECT COUNT(*) FROM sent WHERE sent_at >= ?", (since.astimezone(UTC).isoformat(),))
+        return row.fetchone()[0]
+
     def get_meta(self, key: str) -> str | None:
         row = self._db.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
         return None if row is None else row[0]
@@ -38,6 +48,10 @@ class Storage:
             "INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             (key, value),
         )
+        self._db.commit()
+
+    def delete_meta(self, key: str) -> None:
+        self._db.execute("DELETE FROM meta WHERE key = ?", (key,))
         self._db.commit()
 
     def close(self) -> None:
