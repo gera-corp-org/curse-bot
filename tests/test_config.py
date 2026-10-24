@@ -45,3 +45,16 @@ def test_unknown_flavor():
 def test_bad_poll_interval(value):
     with pytest.raises(ConfigError, match="POLL_INTERVAL"):
         load_config({**BASE, "POLL_INTERVAL": value})
+
+
+def test_repr_hides_secrets():
+    config = load_config({**BASE, "CURSEFORGE_API_KEY": "CF-SECRET", "TELEGRAM_BOT_TOKEN": "TG-SECRET"})
+    text = repr(config)
+    assert "CF-SECRET" not in text
+    assert "TG-SECRET" not in text
+
+
+def test_blank_optional_values_use_defaults():
+    config = load_config({**BASE, "POLL_INTERVAL": "  ", "DB_PATH": " "})
+    assert config.poll_interval == 600
+    assert config.db_path == Path("data/bot.db")

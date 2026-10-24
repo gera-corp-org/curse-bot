@@ -1,6 +1,7 @@
 services:
   bot:
     build: .
+    init: true  # PID 1 пробрасывает SIGTERM, docker stop не ждёт 10 с до SIGKILL
     env_file: .env
     environment:
       DB_PATH: /app/data/bot.db

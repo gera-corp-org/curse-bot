@@ -1,7 +1,7 @@
 """Настройки бота из переменных окружения."""
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from bot.flavors import GROUPS
@@ -15,8 +15,8 @@ class ConfigError(Exception):
 
 @dataclass(frozen=True)
 class Config:
-    curseforge_api_key: str
-    telegram_bot_token: str
+    curseforge_api_key: str = field(repr=False)
+    telegram_bot_token: str = field(repr=False)
     telegram_chat_id: str
     flavors: frozenset[str]  # пусто — сообщать обо всех версиях
     poll_interval: int
@@ -38,7 +38,7 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
         )
 
     try:
-        poll_interval = int(env.get("POLL_INTERVAL", "600"))
+        poll_interval = int(env.get("POLL_INTERVAL", "").strip() or "600")
     except ValueError:
         poll_interval = 0
     if poll_interval <= 0:
@@ -50,5 +50,5 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
         telegram_chat_id=env["TELEGRAM_CHAT_ID"].strip(),
         flavors=flavors,
         poll_interval=poll_interval,
-        db_path=Path(env.get("DB_PATH", "data/bot.db")),
+        db_path=Path(env.get("DB_PATH", "").strip() or "data/bot.db"),
     )
