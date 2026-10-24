@@ -27,22 +27,25 @@
 
 - Базовый URL `https://api.curseforge.com`, ключ в заголовке `x-api-key`
   (выдаётся на console.curseforge.com).
-- WoW: `gameId=1` (проверить через `GET /v1/games`).
-- Раздел «Addons»: `classId` берётся из `GET /v1/categories?gameId=1&classesOnly=true`.
-- Типы версий: `GET /v1/games/1/version-types` (пример: 517 = `wow_retail`).
-- Новые аддоны: `GET /v1/mods/search?gameId=1&classId=<Addons>&sortField=<ReleasedDate>&sortOrder=desc&pageSize=50`.
+- WoW: `gameId=1`.
+- `classId` не передаётся: у WoW на CurseForge, судя по instawow, только раздел аддонов
+  (проверяется живым запросом).
+- Типы версий: `GET /v1/games/1/version-types`. Известные ID (из исходников instawow,
+  «extracted from api.curseforge.com/v1/games/1/version-types»): Retail 517,
+  Classic Era 67408, TBC 73246, Wrath 73713, Titan 81212, Cata 77522, MoP 79434,
+  **Forever 88568**.
+- Новые аддоны: `GET /v1/mods/search?gameId=1&sortField=11&sortOrder=desc&pageSize=50`
+  (`11` = `ModsSearchSortField.ReleasedDate`, подтверждено по instawow).
 - Используемые поля мода: `id`, `name`, `summary`, `links.websiteUrl`, `authors[].name`,
   `categories[].name`, `logo.url`, `screenshots[].url`, `dateReleased`,
   `latestFilesIndexes[].gameVersionTypeId`.
 
-**Проверить живым запросом до написания кода (первая задача реализации):**
-1. Числовое значение `ModsSearchSortField` для сортировки по дате выхода (ожидается `11`).
-   Если такой сортировки нет — запасной вариант B: `LastUpdated` (3) + фильтр
-   `dateReleased > время прошлой проверки`.
-2. Как в `version-types` представлен WoW Forever (отдельный тип или нет; на 2026-10
-   его аддоны на сайте помечены версией клиента `1.60.1`, бета). Если Forever нельзя
-   отличить по типу версии — остановиться и согласовать с пользователем.
-3. `gameId` WoW и `classId` раздела Addons.
+**Проверить живым запросом (скрипт `scripts/probe.py`, сразу после клиента CurseForge):**
+1. Выдача с `sortField=11` действительно отсортирована по `dateReleased` по убыванию.
+   Если нет — запасной вариант B: `LastUpdated` (3) + фильтр
+   `dateReleased > время прошлой проверки` (согласовать с пользователем).
+2. Тип 88568 есть в `version-types` и это Forever. Если нет — остановиться и согласовать.
+3. В выдаче один `classId`. Если несколько — согласовать, какой брать.
 
 ## Структура
 
@@ -56,6 +59,7 @@ curse_bot/
     formatter.py   — подпись и выбор картинок (чистые функции)
     telegram.py    — отправка в Bot API с fallback и обработкой 429
     main.py        — цикл опроса, CLI-флаги
+  scripts/probe.py — живая проверка CurseForge API
   tests/
   Dockerfile, docker-compose.yml, .env.example, README.md
 ```
@@ -78,11 +82,15 @@ Telegram Bot API вызывается напрямую через `httpx`, бе�
 
 ## Версии игры (flavors.py)
 
-На старте загружаются типы версий и раскладываются по группам:
+Группы задаются встроенной таблицей известных ID (см. выше):
 
-- **Retail** — `wow_retail`;
-- **Classic** — все Classic-типы (Era, TBC, Wrath, Cata, MoP Classic и т.п.);
-- **Forever** — тип, в имени/slug которого есть «forever».
+- **Retail** — 517;
+- **Classic** — 67408 (Era), 73246 (TBC), 73713 (Wrath), 81212 (Titan), 77522 (Cata), 79434 (MoP);
+- **Forever** — 88568.
+
+На старте дополнительно загружаются типы версий из API. Типы, которых нет в таблице,
+распознаются по имени/slug: «forever» → Forever, «classic» → Classic, иначе без группы.
+Если загрузить типы не удалось — работаем по встроенной таблице.
 
 Метка в сообщении: группы через ` · `, у Classic в скобках конкретные версии:
 `Retail · Classic (Era, MoP) · Forever`. Тип, не попавший ни в одну группу,
@@ -146,7 +154,7 @@ summary
 
 ## Тестирование (pytest)
 
-- `flavors`: раскладка типов по группам на сохранённом реальном ответе `version-types`;
+- `flavors`: раскладка известных ID по группам; распознавание неизвестных типов по имени;
   фильтр; формат метки; неизвестный тип.
 - `formatter`: экранирование, обрезка до 1024, выбор картинок (лого + 3 скрина,
   без скринов, без лого, дубль лого среди скринов).
