@@ -1,12 +1,10 @@
 """Клиент CurseForge API — только запросы, нужные боту."""
-from datetime import UTC, datetime
-
 import httpx
 
 API_URL = "https://api.curseforge.com"
 WOW_GAME_ID = 1
-SORT_RELEASED_DATE = 11  # ModsSearchSortField.ReleasedDate
-PAGE_SIZE = 50  # максимум, который отдаёт API
+BATCH_SIZE = 1000  # максимум id в одном POST /v1/mods
+SCAN_START_ID = 1_000_000  # заведомо существующий id, от него ищем текущий максимум
 
 
 class CurseForgeError(Exception):
@@ -18,21 +16,45 @@ class CurseForgeClient:
         self._headers = {"x-api-key": api_key, "Accept": "application/json"}
         self._http = http or httpx.Client(base_url=API_URL, timeout=30)
 
-    def latest_released(self, index: int = 0) -> list[dict]:
-        """Аддоны WoW с недавним релизом (dateReleased — дата последнего файла), от новых к старым; index — смещение страницы."""
-        return self._get(
-            "/v1/mods/search",
-            {"gameId": WOW_GAME_ID, "sortField": SORT_RELEASED_DATE, "sortOrder": "desc", "pageSize": PAGE_SIZE, "index": index},
-        )
-
     def version_types(self) -> list[dict]:
-        return self._get(f"/v1/games/{WOW_GAME_ID}/version-types")
+        return self._request("GET", f"/v1/games/{WOW_GAME_ID}/version-types")
 
-    def _get(self, path: str, params: dict | None = None):
+    def get_mods(self, mod_ids: list[int]) -> list[dict]:
+        """Аддоны по id (любых игр); несуществующие id в ответе просто отсутствуют."""
+        mods: list[dict] = []
+        for start in range(0, len(mod_ids), BATCH_SIZE):
+            chunk = mod_ids[start : start + BATCH_SIZE]
+            mods += self._request("POST", "/v1/mods", json={"modIds": chunk}, empty_on_404=True)
+        return mods
+
+    def find_max_id(self) -> int:
+        """Текущий наибольший id аддона: экспоненциальный поиск окном BATCH_SIZE, затем бинарный."""
+        lo = SCAN_START_ID
+        if not self._window(lo):
+            raise CurseForgeError(f"CurseForge не вернул аддонов в окне с id {lo}")
+        hi = lo * 2
+        while self._window(hi):
+            lo, hi = hi, hi * 2
+        while hi - lo > BATCH_SIZE:
+            mid = (lo + hi) // 2
+            if self._window(mid):
+                lo = mid
+            else:
+                hi = mid
+        found = self.get_mods(list(range(lo, lo + 2 * BATCH_SIZE)))
+        return max(m["id"] for m in found)
+
+    def _window(self, start: int) -> list[dict]:
+        return self.get_mods(list(range(start, start + BATCH_SIZE)))
+
+    def _request(self, method: str, path: str, *, params: dict | None = None, json: dict | None = None,
+                 empty_on_404: bool = False) -> list[dict]:
         try:
-            response = self._http.get(path, params=params, headers=self._headers)
+            response = self._http.request(method, path, params=params, json=json, headers=self._headers)
         except httpx.HTTPError as e:
             raise CurseForgeError(f"CurseForge недоступен: {e}") from e
+        if response.status_code == 404 and empty_on_404:
+            return []  # ни одного из запрошенных id не существует
         if response.status_code == 403:
             raise CurseForgeError("CurseForge ответил 403: неверный или отозванный API-ключ")
         if response.status_code != 200:
@@ -44,14 +66,3 @@ class CurseForgeClient:
         if not isinstance(data, list):
             raise CurseForgeError("CurseForge вернул некорректный ответ")
         return data
-
-
-def parse_date(value) -> datetime | None:
-    """ISO-дата CurseForge ("...Z", в т.ч. 7 знаков доли секунды) → aware UTC; None, если не разобрать."""
-    if not isinstance(value, str):
-        return None
-    try:
-        parsed = datetime.fromisoformat(value)
-    except ValueError:
-        return None
-    return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
