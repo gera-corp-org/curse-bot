@@ -62,6 +62,8 @@ class TelegramClient:
                 body = response.json()
             except ValueError:
                 body = {}
+            if not isinstance(body, dict):
+                body = {}
             if body.get("ok"):
                 return body["result"]
             retry_after = (body.get("parameters") or {}).get("retry_after")

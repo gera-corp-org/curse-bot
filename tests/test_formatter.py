@@ -85,3 +85,15 @@ def test_pick_images_dedupes_logo():
 
 def test_pick_images_nothing():
     assert pick_images(make_mod(logo=None, screenshots=None)) == []
+
+
+def test_none_name_and_nameless_people_tolerated():
+    mod = make_mod(
+        name=None,
+        authors=[{"name": None}, {}, {"name": "Alice"}],
+        categories=[{}, {"name": None}],
+    )
+    caption = build_caption(mod, [])
+    assert caption.startswith("🆕 <b></b>")
+    assert "👤 Alice" in caption
+    assert "📂" not in caption

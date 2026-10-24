@@ -28,12 +28,12 @@ def pick_images(mod: dict) -> list[str]:
 
 
 def build_caption(mod: dict, flavors: list[Flavor]) -> str:
-    head = [f"🆕 <b>{escape(mod.get('name', ''))}</b>"]
+    head = [f"🆕 <b>{escape(mod.get('name') or '')}</b>"]
     meta = []
-    authors = ", ".join(a["name"] for a in mod.get("authors") or [])
+    authors = ", ".join(a["name"] for a in mod.get("authors") or [] if a.get("name"))
     if authors:
         meta.append(f"👤 {escape(authors)}")
-    categories = ", ".join(c["name"] for c in mod.get("categories") or [])
+    categories = ", ".join(c["name"] for c in mod.get("categories") or [] if c.get("name"))
     if categories:
         meta.append(f"📂 {escape(categories)}")
     if meta:

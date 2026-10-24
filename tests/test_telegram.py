@@ -105,3 +105,11 @@ def test_network_error_does_not_leak_token():
         make_client(handler).send_addon("cap", [])
     assert "недоступен" in str(info.value)
     assert "TOKEN" not in str(info.value)
+
+
+def test_non_dict_json_body_is_telegram_error():
+    def handler(request):
+        return httpx.Response(500, json=[1, 2])
+
+    with pytest.raises(TelegramError, match="500"):
+        make_client(handler).send_addon("cap", [])

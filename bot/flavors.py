@@ -38,11 +38,11 @@ def build_flavor_map(version_types: list[dict]) -> dict[int, Flavor]:
     """Встроенная таблица + типы из ответа API, которых в ней нет (распознаются по имени)."""
     result = dict(KNOWN_TYPES)
     for vt in version_types:
-        type_id = vt["id"]
-        if type_id in result:
+        type_id = vt.get("id")
+        if not isinstance(type_id, int) or type_id in result:
             continue
         name = vt.get("name") or vt.get("slug") or f"type {type_id}"
-        text = f"{name} {vt.get('slug', '')}".lower()
+        text = f"{name} {vt.get('slug') or ''}".lower()
         if "forever" in text:
             flavor = Flavor(FOREVER, "Forever")
         elif "classic" in text:

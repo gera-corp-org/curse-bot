@@ -73,3 +73,13 @@ def test_passes_filter():
     assert passes_filter(unknown_only, frozenset())
     assert not passes_filter(unknown_only, frozenset({RETAIL}))
     assert not passes_filter([], frozenset({RETAIL}))
+
+
+def test_build_flavor_map_tolerates_bad_entries():
+    fmap = build_flavor_map([
+        {"name": "no id"},
+        {"id": "x", "name": "string id"},
+        {"id": 999, "name": "WoW Something", "slug": None},
+    ])
+    assert fmap[999] == Flavor(None, "WoW Something")
+    assert "x" not in fmap
