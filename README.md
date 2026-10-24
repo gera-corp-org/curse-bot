@@ -103,5 +103,5 @@ WantedBy=multi-user.target
 uv run pytest
 uv run --env-file .env python -m scripts.probe   # живая проверка CurseForge API
 # после изменения зависимостей — обновить requirements.txt для образа (CI это проверяет):
-uv export --no-dev --no-emit-project --format requirements-txt -o requirements.txt
+uv export --no-dev --no-emit-project --no-header --format requirements-txt -o requirements.txt
 ```

@@ -7,7 +7,7 @@
 FROM --platform=$BUILDPLATFORM python:3.12-slim AS deps
 ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /build
-# requirements.txt — экспорт uv.lock (`uv export --no-dev --no-emit-project`), с хешами.
+# requirements.txt — экспорт uv.lock (`uv export --no-dev --no-emit-project --no-header`), с хешами.
 COPY requirements.txt .
 RUN pip install --require-hashes --no-deps --only-binary=:all: --target /deps -r requirements.txt \
  && rm -rf /deps/bin \

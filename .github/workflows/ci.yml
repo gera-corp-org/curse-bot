@@ -33,7 +33,7 @@ jobs:
       # Образ ставит зависимости из requirements.txt; он должен совпадать с uv.lock.
       - name: requirements.txt соответствует uv.lock
         run: |
-          uv export --no-dev --no-emit-project --format requirements-txt -o /tmp/requirements.txt
+          uv export --no-dev --no-emit-project --no-header --format requirements-txt -o /tmp/requirements.txt
           diff -u requirements.txt /tmp/requirements.txt
 
   lint:
