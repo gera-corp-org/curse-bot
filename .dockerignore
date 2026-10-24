@@ -1,7 +1,12 @@
 .env
 .venv
+.superpowers
+.pytest_cache
 data
 tests
 docs
+charts
+scripts
+.github
 .git
 **/__pycache__

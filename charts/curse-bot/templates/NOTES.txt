@@ -1,0 +1,16 @@
+Бот {{ include "curse-bot.fullname" . }} установлен в namespace {{ .Release.Namespace }}.
+
+При первом запуске он только запоминает текущий последний id проекта на CurseForge
+и ничего не отправляет: уведомления пойдут о проектах, созданных после этого,
+по мере их одобрения модераторами.
+
+Логи:
+  kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "curse-bot.fullname" . }} -f
+{{- if .Values.vault.enabled }}
+
+Секреты берутся из Vault: {{ .Values.vault.secretPath }}
+Ключи: {{ values .Values.vault.env | sortAlpha | join ", " }}
+{{- else }}
+
+Секреты берутся из Secret {{ .Values.existingSecret }}.
+{{- end }}

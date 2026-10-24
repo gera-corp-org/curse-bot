@@ -1,0 +1,148 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+    tags: ["v*.*.*"]
+  pull_request:
+  workflow_dispatch:
+
+# По умолчанию — минимальные права; задачи расширяют их точечно.
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  test:
+    name: Тесты
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Python берётся из .python-version (3.12, как в образе).
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      - run: uv sync --locked
+      - run: uv run pytest -q
+      # Образ ставит зависимости из requirements.txt; он должен совпадать с uv.lock.
+      - name: requirements.txt соответствует uv.lock
+        run: |
+          uv export --no-dev --no-emit-project --format requirements-txt -o /tmp/requirements.txt
+          diff -u requirements.txt /tmp/requirements.txt
+
+  lint:
+    name: Helm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+      - name: helm lint и рендер всех веток
+        run: |
+          helm lint charts/curse-bot --strict
+          helm template t charts/curse-bot > /dev/null
+          helm template t charts/curse-bot --set vault.enabled=false --set existingSecret=s > /dev/null
+          helm template t charts/curse-bot --set persistence.enabled=false > /dev/null
+          # без источника секретов чарт обязан отказаться рендериться
+          if helm template t charts/curse-bot --set vault.enabled=false > /dev/null 2>&1; then
+            echo "::error::чарт отрендерился без источника секретов"
+            exit 1
+          fi
+
+  image:
+    name: Образ
+    needs: [test, lint]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      PUSH: ${{ github.event_name != 'pull_request' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        if: env.PUSH == 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=sha-
+            type=ref,event=pr
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      # Финальная стадия не выполняет RUN, поэтому arm64 собирается без эмуляции QEMU.
+      - id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: ${{ env.PUSH == 'true' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          build-args: VERSION=${{ steps.meta.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  chart:
+    name: Чарт
+    needs: image
+    # Чарт публикуется только для релизов и только после того, как образ этой версии
+    # собран: ArgoCD не увидит версию, для которой ещё нет образа.
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+      - name: Опубликовать чарт в GHCR
+        env:
+          TAG: ${{ github.ref_name }}
+          REGISTRY_USER: ${{ github.actor }}
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CHARTS: oci://ghcr.io/${{ github.repository_owner }}/charts
+        run: |
+          VERSION="${TAG#v}"
+          helm package charts/curse-bot --version "$VERSION" --app-version "$VERSION" -d dist
+          helm registry login ghcr.io -u "$REGISTRY_USER" --password-stdin <<< "$REGISTRY_TOKEN"
+          helm push "dist/curse-bot-${VERSION}.tgz" "$CHARTS"
+
+  release:
+    name: Релиз на GitHub
+    needs: chart
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Опубликовать релиз с автоматическими заметками
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" \
+            --generate-notes --verify-tag

@@ -29,15 +29,47 @@ docker compose up -d --build
 docker compose logs -f
 ```
 
-Состояние (курсор и список ожидающих модерации) лежит в `./data/bot.db`. При самом первом
+Состояние (курсор и список ожидающих модерации) лежит в томе `botdata` (`/data/bot.db`
+в контейнере). При самом первом
 запуске бот только находит текущий последний ID проекта на CurseForge (`baseline` в логе)
 и ничего не отправляет — уведомления пойдут о проектах, созданных после этого.
 
 Проверка отправки (разово шлёт 2 последних аддона, базу не трогает):
 
 ```bash
-docker compose run --rm bot python -m bot --send-latest 2
+docker compose run --rm bot --send-latest 2
 ```
+
+## Kubernetes (Helm)
+
+Образ `ghcr.io/gera-corp-org/curse-bot` и чарт `oci://ghcr.io/gera-corp-org/charts/curse-bot`
+публикуются из CI. Секреты по умолчанию берутся из Vault через bank-vaults
+vault-secrets-webhook (в Kubernetes Secret они не попадают):
+
+```bash
+vault kv put secret/curse-bot \
+  CURSEFORGE_API_KEY='$2a$10$…' TELEGRAM_BOT_TOKEN='…' TELEGRAM_CHAT_ID='…'
+helm install curse-bot oci://ghcr.io/gera-corp-org/charts/curse-bot -n curse-bot --create-namespace
+```
+
+Без Vault — готовый Secret с теми же тремя ключами:
+`--set vault.enabled=false --set existingSecret=<имя>`. Остальные настройки — в
+[`charts/curse-bot/values.yaml`](charts/curse-bot/values.yaml) (`config.flavors`,
+`config.pollInterval`, `persistence.*`).
+
+Бот должен работать в одном экземпляре: два экземпляра (например, в кластере и в
+`docker compose`) отправят каждый аддон дважды.
+
+## Релизы
+
+```bash
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+Тег запускает CI: тесты → образ `0.2.0` (amd64 + arm64) → чарт `0.2.0` в GHCR →
+GitHub Release с автоматическими заметками. Чарт публикуется только после образа,
+поэтому ArgoCD с `targetRevision: 0.*` не увидит версию без образа. Каждый пуш в
+`master` собирает образ `latest` и `sha-<коммит>`.
 
 ## Запуск без Docker
 
@@ -70,4 +102,6 @@ WantedBy=multi-user.target
 ```bash
 uv run pytest
 uv run --env-file .env python -m scripts.probe   # живая проверка CurseForge API
+# после изменения зависимостей — обновить requirements.txt для образа (CI это проверяет):
+uv export --no-dev --no-emit-project --format requirements-txt -o requirements.txt
 ```

@@ -1,0 +1,103 @@
+{{- if and (not .Values.vault.enabled) (not .Values.existingSecret) }}
+{{- fail "нужен источник секретов: vault.enabled=true или existingSecret" }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "curse-bot.fullname" . }}
+  labels:
+    {{- include "curse-bot.labels" . | nindent 4 }}
+spec:
+  # Строго один экземпляр: старый под останавливается до запуска нового,
+  # иначе на время выкатки аддоны отправлялись бы дважды.
+  replicas: 1
+  revisionHistoryLimit: 3
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "curse-bot.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- $annotations := include "curse-bot.vaultAnnotations" . | fromYaml | default dict }}
+      {{- $annotations = merge $annotations (.Values.podAnnotations | default dict) }}
+      {{- with $annotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "curse-bot.labels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "curse-bot.serviceAccountName" . }}
+      # Токен ServiceAccount нужен только vault-env для входа в Vault (auth method kubernetes).
+      automountServiceAccountToken: {{ .Values.vault.enabled }}
+      enableServiceLinks: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: bot
+          image: {{ include "curse-bot.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # Команда задана явно: vault-secrets-webhook оборачивает её в vault-env.
+          command: ["python", "-m", "bot"]
+          env:
+            - name: DB_PATH
+              value: /data/bot.db
+            - name: FLAVORS
+              value: {{ .Values.config.flavors | quote }}
+            - name: POLL_INTERVAL
+              value: {{ .Values.config.pollInterval | quote }}
+            {{- if .Values.vault.enabled }}
+            {{- range $name, $key := .Values.vault.env }}
+            - name: {{ $name }}
+              value: {{ printf "vault:%s#%s" $.Values.vault.secretPath $key | quote }}
+            {{- end }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- if and (not .Values.vault.enabled) .Values.existingSecret }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.existingSecret }}
+          {{- end }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.existingClaim | default (include "curse-bot.fullname" .) }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Mi
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

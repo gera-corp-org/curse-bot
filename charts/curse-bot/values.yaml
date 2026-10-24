@@ -1,0 +1,106 @@
+# Значения по умолчанию для чарта curse-bot.
+
+image:
+  repository: ghcr.io/gera-corp-org/curse-bot
+  # Пусто — используется appVersion чарта (у опубликованного чарта совпадает с его версией).
+  tag: ""
+  # Если указан (sha256:...), образ берётся по дайджесту, а tag игнорируется.
+  digest: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+# Реплика всегда одна: два экземпляра отправили бы каждый аддон дважды, а SQLite
+# не рассчитан на нескольких писателей, поэтому replicaCount намеренно не настраивается.
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+podAnnotations: {}
+podLabels: {}
+
+# --- безопасность (проходит Pod Security профиль restricted) ---
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  fsGroupChangePolicy: OnRootMismatch
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  privileged: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  capabilities:
+    drop: ["ALL"]
+
+# --- настройки бота ---
+config:
+  # О каких версиях WoW сообщать: retail, classic, forever через запятую; пусто — обо всех.
+  flavors: ""
+  # Секунд между проверками CurseForge.
+  pollInterval: 600
+
+# Дополнительные переменные окружения (список в формате Kubernetes).
+extraEnv: []
+
+# --- секреты ---
+# Нужны CURSEFORGE_API_KEY, TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID. Два способа:
+#
+# 1) Vault через bank-vaults vault-secrets-webhook: значения подставляются прямо
+#    в окружение процесса и в Kubernetes Secret не попадают.
+vault:
+  enabled: true
+  # Путь к секрету в KV v2 (с /data/ в пути).
+  secretPath: secret/data/curse-bot
+  # Переменная окружения -> ключ внутри секрета. Каждый ключ должен существовать
+  # в Vault, иначе под не запустится.
+  env:
+    CURSEFORGE_API_KEY: CURSEFORGE_API_KEY
+    TELEGRAM_BOT_TOKEN: TELEGRAM_BOT_TOKEN
+    TELEGRAM_CHAT_ID: TELEGRAM_CHAT_ID
+  # Пустые значения — используются настройки по умолчанию самого webhook.
+  addr: ""
+  role: ""
+  # Путь метода аутентификации kubernetes в Vault.
+  authPath: ""
+  skipVerify: ""
+  # Перезапускать под при изменении секрета (нужен vault-secrets-reloader).
+  reloadOnSecretChange: true
+  # Любые другие аннотации vault.security.banzaicloud.io/*.
+  annotations: {}
+
+# 2) Готовый Secret с этими тремя ключами (используется, когда vault.enabled=false).
+existingSecret: ""
+
+# --- хранение данных (курсор и список ожидания модерации) ---
+persistence:
+  enabled: true
+  # Пусто — StorageClass по умолчанию.
+  storageClass: ""
+  accessModes:
+    - ReadWriteOnce
+  size: 64Mi
+  # Использовать уже существующий PVC вместо создания нового.
+  existingClaim: ""
+  # PVC не удаляется при helm uninstall и при удалении приложения в ArgoCD.
+  keepOnUninstall: true
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 48Mi
+  limits:
+    memory: 128Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
