@@ -59,7 +59,9 @@ class FakeTelegram:
         self.updates = list(updates or [])  # batches for getUpdates (or exceptions)
         self.polls = []  # (offset, timeout)
         self.on_poll = on_poll  # called with timeout - advances the fake clock
-        self.menu = None
+        self.menus = {}  # language_code (None = default) -> commands
+        self.buttons = []  # (chat_id, buttons) for messages that had any
+        self.answered = []  # callback query ids
 
     def send_addon(self, caption, images, chat_id=None):
         if self.fail_times:
@@ -70,8 +72,13 @@ class FakeTelegram:
         else:
             self.private.append((chat_id, caption, images))
 
-    def send_text(self, chat_id, text):
+    def send_text(self, chat_id, text, buttons=None):
         self.texts.append((chat_id, text))
+        if buttons:
+            self.buttons.append((chat_id, buttons))
+
+    def answer_callback_query(self, callback_query_id):
+        self.answered.append(callback_query_id)
 
     def get_updates(self, offset, timeout):
         self.polls.append((offset, timeout))
@@ -82,8 +89,8 @@ class FakeTelegram:
             self.on_poll(timeout)  # an empty long poll lasts the whole timeout
         return batch
 
-    def set_my_commands(self, commands):
-        self.menu = commands
+    def set_my_commands(self, commands, language_code=None):
+        self.menus[language_code] = commands
 
     @property
     def names(self):

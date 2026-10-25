@@ -3,9 +3,10 @@ from datetime import timedelta
 
 import pytest
 
-from bot.commands import MENU, OFFSET_KEY, Commands
+from bot.commands import OFFSET_KEY, Commands
 from bot.curseforge import CurseForgeError
 from bot.flavors import CLASSIC, FOREVER, RETAIL
+from bot.i18n import menu
 from bot.storage import Storage
 from bot.telegram import TelegramError
 from tests.fakes import NOW, Clock, FakeCurseForge, FakeTelegram, make_bot, mod, new
@@ -14,12 +15,15 @@ ADMIN = 111
 STRANGER = 999
 
 
-def message(text, user=ADMIN, chat_type="private", update_id=1):
+def message(text, user=ADMIN, chat_type="private", update_id=1, lang=None):
+    sender = {"id": user, "username": "someone"}
+    if lang:
+        sender["language_code"] = lang
     return {
         "update_id": update_id,
         "message": {
             "message_id": 5,
-            "from": {"id": user, "username": "someone"},
+            "from": sender,
             "chat": {"id": user, "type": chat_type},
             "text": text,
         },
@@ -94,7 +98,7 @@ def test_help_lists_commands(text):
     commands, telegram, _, _ = setup(mod(1))
     commands.handle(message(text))
     answer = reply(telegram)
-    for command, _ in MENU:
+    for command, _ in menu("en"):
         assert f"/{command}" in answer
 
 
@@ -292,10 +296,102 @@ def test_failing_command_is_logged_and_not_retried(caplog):
 def test_register_menu_sets_commands_and_tolerates_errors():
     commands, telegram, _, _ = setup(mod(1))
     commands.register_menu()
-    assert telegram.menu == MENU
+    assert telegram.menus == {None: menu("en"), "ru": menu("ru")}
 
-    def broken(_commands):
+    def broken(_commands, language_code=None):
         raise TelegramError("setMyCommands: 400")
 
     telegram.set_my_commands = broken
     commands.register_menu()  # does not crash
+
+
+# --- reply language ---
+
+
+def button_press(data, user=ADMIN, callback_id="cb1", update_id=2):
+    return {
+        "update_id": update_id,
+        "callback_query": {
+            "id": callback_id,
+            "from": {"id": user},
+            "data": data,
+            "message": {"message_id": 9, "chat": {"id": user, "type": "private"}},
+        },
+    }
+
+
+def test_russian_telegram_client_gets_russian_replies():
+    commands, telegram, _, _ = setup(mod(1))
+    commands.handle(message("/status", lang="ru-RU"))
+    assert "Ждут модерации: 0" in reply(telegram)
+
+
+def test_other_languages_get_english():
+    commands, telegram, _, _ = setup(mod(1))
+    commands.handle(message("/status", lang="de"))
+    assert "Awaiting moderation: 0" in reply(telegram)
+
+
+def test_lang_command_sets_language_and_it_persists():
+    commands, telegram, storage, _ = setup(mod(1))
+    commands.handle(message("/lang ru"))
+    assert "Язык: Русский" in reply(telegram)
+    commands.handle(message("/pending"))  # no language_code in the message
+    assert "пуста" in reply(telegram)
+    assert storage.get_meta(f"lang.{ADMIN}") == "ru"
+
+
+def test_chosen_language_wins_over_telegram_language():
+    commands, telegram, _, _ = setup(mod(1))
+    commands.handle(message("/lang en", lang="ru"))
+    commands.handle(message("/status", lang="ru"))
+    assert "Awaiting moderation" in reply(telegram)
+
+
+def test_lang_without_argument_offers_buttons():
+    commands, telegram, _, _ = setup(mod(1))
+    commands.handle(message("/lang"))
+    assert "Language: English" in reply(telegram)
+    assert telegram.buttons == [(ADMIN, [("English", "lang:en"), ("Русский", "lang:ru")])]
+
+
+def test_lang_unknown_code():
+    commands, telegram, storage, _ = setup(mod(1))
+    commands.handle(message("/lang de"))
+    assert "de" in reply(telegram) and "en, ru" in reply(telegram)
+    assert storage.get_meta(f"lang.{ADMIN}") is None
+
+
+def test_language_button_switches_language():
+    commands, telegram, storage, _ = setup(mod(1))
+    commands.handle(button_press("lang:ru"))
+    assert telegram.answered == ["cb1"]
+    assert storage.get_meta(f"lang.{ADMIN}") == "ru"
+    assert "Язык: Русский" in reply(telegram)
+
+
+def test_button_from_stranger_is_ignored():
+    commands, telegram, storage, _ = setup(mod(1))
+    commands.handle(button_press("lang:ru", user=STRANGER))
+    assert telegram.answered == [] and telegram.texts == []
+    assert storage.get_meta(f"lang.{STRANGER}") is None
+
+
+def test_unknown_button_is_answered_and_ignored():
+    commands, telegram, _, _ = setup(mod(1))
+    commands.handle(button_press("frob:1"))
+    assert telegram.answered == ["cb1"]
+    assert telegram.texts == []
+
+
+def test_russian_help_and_durations():
+    commands, telegram, storage, clock = setup(mod(1))
+    commands._bot.run_once()
+    clock.value = NOW + timedelta(hours=5)
+    commands.handle(message("/lang ru"))
+    commands.handle(message("/status"))
+    answer = reply(telegram)
+    assert "5 ч назад" in answer
+    assert "все (из настроек)" in answer
+    commands.handle(message("/help"))
+    assert "Ваш id" in reply(telegram) and "/lang" in reply(telegram)

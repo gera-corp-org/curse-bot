@@ -1,8 +1,9 @@
-"""Bot commands in Telegram private messages: /status, /latest, /pending, /flavors, /help.
+"""Bot commands in Telegram private messages: /status, /latest, /pending, /flavors, /lang, /help.
 
 Incoming messages are fetched by long polling (getUpdates) in the pauses between
 CurseForge polls, in the same thread, so nothing is shared concurrently with the poll loop.
-The bot answers only in private chats with users from TELEGRAM_ADMIN_IDS.
+The bot answers only in private chats with users from TELEGRAM_ADMIN_IDS, in the language
+each of them chose with /lang, or else the language of their Telegram client.
 """
 import logging
 import time
@@ -13,6 +14,7 @@ from typing import TYPE_CHECKING
 
 from bot.curseforge import CurseForgeError
 from bot.flavors import CLASSIC, FOREVER, GROUPS, RETAIL
+from bot.i18n import DEFAULT, LANGUAGE_NAMES, LANGUAGES, menu, pick, t
 from bot.storage import Storage
 from bot.telegram import TelegramError
 
@@ -22,6 +24,8 @@ if TYPE_CHECKING:  # bot.main imports this module itself
 log = logging.getLogger(__name__)
 
 OFFSET_KEY = "tg_offset"  # next update_id: old commands are not repeated after a restart
+LANG_KEY = "lang.{user_id}"  # reply language chosen with /lang
+LANG_BUTTON = "lang:"  # callback data prefix of the language buttons
 POLL_TIMEOUT = 30  # seconds to hold one getUpdates
 ERROR_PAUSE = 10  # pause after a getUpdates error, to avoid spinning idly
 LATEST_DEFAULT = 3
@@ -30,23 +34,8 @@ PENDING_LIMIT = 20
 LATEST_PAUSE = 1  # seconds between addons in the /latest reply
 _DAY = timedelta(days=1)
 
-MENU = [
-    ("status", "Status: last poll, queue, sent in the last 24 h"),
-    ("latest", "Latest approved addons (/latest 5)"),
-    ("pending", "Addons awaiting moderation"),
-    ("flavors", "Version filter: /flavors forever,retail | all | reset"),
-    ("help", "List of commands"),
-]
-
 _GROUP_TITLES = {RETAIL: "Retail", CLASSIC: "Classic", FOREVER: "Forever"}
-_STATUS_TEXT = {
-    1: "in moderation",
-    2: "needs changes",
-    3: "under review",
-    4: "approved, waiting for files",
-    6: "changes made",
-    10: "under review",
-}
+_KNOWN_STATUSES = {1, 2, 3, 4, 6, 10}
 
 
 class Commands:
@@ -70,11 +59,12 @@ class Commands:
         self._strangers_logged: set[int] = set()
 
     def register_menu(self) -> None:
-        """Command menu in the Telegram client; commands work without it too."""
-        try:
-            self._telegram.set_my_commands(MENU)
-        except TelegramError as e:
-            log.warning("could not register the command menu: %s", e)
+        """Command menu in the Telegram client, per language; commands work without it too."""
+        for lang in LANGUAGES:
+            try:
+                self._telegram.set_my_commands(menu(lang), language_code=None if lang == DEFAULT else lang)
+            except TelegramError as e:
+                log.warning("could not register the %s command menu: %s", lang, e)
 
     def wait(self, seconds: float) -> None:
         """Wait seconds seconds, answering incoming commands. Plugged into Bot.run_forever."""
@@ -100,108 +90,114 @@ class Commands:
                     log.exception("error while handling command from update %s", update_id)
 
     def handle(self, update: dict) -> None:
+        if isinstance(update.get("callback_query"), dict):
+            self._handle_button(update["callback_query"])
+            return
         message = update.get("message")
         if not isinstance(message, dict):
             return
         chat = message.get("chat") or {}
         user = message.get("from") or {}
-        if chat.get("type") != "private":
-            return
-        user_id = user.get("id")
-        if user_id not in self._admin_ids:
-            if user_id not in self._strangers_logged:
-                self._strangers_logged.add(user_id)
-                log.info(
-                    "message from a user who is not allowed, id=%s (@%s); to allow them, add the id to TELEGRAM_ADMIN_IDS",
-                    user_id,
-                    user.get("username"),
-                )
+        if chat.get("type") != "private" or not self._allowed(user):
             return
 
         chat_id = chat["id"]
+        user_id = user["id"]
+        lang = self._lang(user)
         text = (message.get("text") or "").strip()
         if not text.startswith("/"):
-            self._reply(chat_id, self._help(user_id))
+            self._reply(chat_id, self._help(lang, user_id))
             return
         command, _, arg = text.partition(" ")
         command = command[1:].split("@", 1)[0].lower()
         arg = arg.strip()
 
         handler = {
-            "start": lambda: self._reply(chat_id, self._help(user_id)),
-            "help": lambda: self._reply(chat_id, self._help(user_id)),
-            "status": lambda: self._reply(chat_id, self._status()),
-            "pending": lambda: self._reply(chat_id, self._pending()),
-            "flavors": lambda: self._reply(chat_id, self._flavors(arg)),
-            "latest": lambda: self._latest(chat_id, arg),
+            "start": lambda: self._reply(chat_id, self._help(lang, user_id)),
+            "help": lambda: self._reply(chat_id, self._help(lang, user_id)),
+            "status": lambda: self._reply(chat_id, self._status(lang)),
+            "pending": lambda: self._reply(chat_id, self._pending(lang)),
+            "flavors": lambda: self._reply(chat_id, self._flavors(lang, arg)),
+            "latest": lambda: self._latest(lang, chat_id, arg),
+            "lang": lambda: self._lang_command(lang, chat_id, user_id, arg),
         }.get(command)
         if handler is None:
-            self._reply(chat_id, f"Unknown command /{escape(command)}. See /help for the list of commands")
+            self._reply(chat_id, t(lang, "unknown_command", command=escape(command)))
             return
         handler()
 
+    def _handle_button(self, query: dict) -> None:
+        user = query.get("from") or {}
+        chat = (query.get("message") or {}).get("chat") or {}
+        if chat.get("type") != "private" or not self._allowed(user):
+            return
+        self._answer(query.get("id"))
+        data = query.get("data") or ""
+        if data.startswith(LANG_BUTTON):
+            self._set_lang(chat["id"], user["id"], data.removeprefix(LANG_BUTTON))
+
     # --- commands ---
 
-    def _help(self, user_id: int) -> str:
-        lines = ["<b>curse-bot</b> — new WoW addons from CurseForge", ""]
-        lines += [f"/{command} — {escape(description)}" for command, description in MENU]
-        lines += ["", f"Your id: <code>{user_id}</code>"]
+    def _help(self, lang: str, user_id: int) -> str:
+        lines = [t(lang, "help.title"), ""]
+        lines += [f"/{command} — {escape(description)}" for command, description in menu(lang)]
+        lines += ["", t(lang, "help.your_id", user_id=user_id)]
         return "\n".join(lines)
 
-    def _status(self) -> str:
+    def _status(self, lang: str) -> str:
         at = self._bot.last_cycle()
-        last_text = "never" if at is None else f"{at:%d.%m %H:%M} UTC, {_ago(self._now() - at)} ago"
+        if at is None:
+            when = t(lang, "status.never")
+        else:
+            when = t(lang, "status.ago", at=f"{at:%d.%m %H:%M}", ago=_ago(lang, self._now() - at))
         cursor = self._bot.cursor()
-        cursor = "—" if cursor is None else cursor
-        sent = self._storage.sent_since(self._now() - _DAY)
         return "\n".join(
             [
                 "<b>curse-bot</b>",
-                f"Last poll: {last_text}",
-                f"Next id: {cursor}",
-                f"Awaiting moderation: {len(self._storage.pending())}",
-                f"Sent to channel in 24 h: {sent}",
-                f"Versions: {self._flavors_state()}",
+                t(lang, "status.last_poll", when=when),
+                t(lang, "status.next_id", cursor="—" if cursor is None else cursor),
+                t(lang, "status.pending", count=len(self._storage.pending())),
+                t(lang, "status.sent", count=self._storage.sent_since(self._now() - _DAY)),
+                t(lang, "versions", state=self._flavors_state(lang)),
             ]
         )
 
-    def _pending(self) -> str:
+    def _pending(self, lang: str) -> str:
         try:
             items = self._bot.pending_mods()
         except CurseForgeError as e:
-            return f"Could not query CurseForge: {escape(str(e))}"
+            return t(lang, "curseforge_error", error=escape(str(e)))
         if not items:
-            return "The waiting queue is empty."
-        lines = [f"<b>Awaiting moderation: {len(items)}</b>"]
+            return t(lang, "pending.empty")
+        lines = [t(lang, "pending.title", count=len(items))]
         for mod_id, mod, first_seen in items[:PENDING_LIMIT]:
-            waited = _ago(self._now() - first_seen)
+            waited = _ago(lang, self._now() - first_seen)
             if mod is None:
-                lines.append(f"• id {mod_id} — not in API, waiting {waited}")
+                lines.append(t(lang, "pending.missing", mod_id=mod_id, waited=waited))
                 continue
             name = escape(mod.get("name") or f"id {mod_id}")
             url = (mod.get("links") or {}).get("websiteUrl")
             title = f'<a href="{escape(url)}">{name}</a>' if url else name
-            status = _STATUS_TEXT.get(mod.get("status"), f"status {mod.get('status')}")
-            lines.append(f"• {title} — {status}, waiting {waited}")
+            lines.append(t(lang, "pending.item", title=title, status=_mod_status(lang, mod.get("status")), waited=waited))
         if len(items) > PENDING_LIMIT:
-            lines.append(f"…and {len(items) - PENDING_LIMIT} more")
+            lines.append(t(lang, "pending.more", count=len(items) - PENDING_LIMIT))
         return "\n".join(lines)
 
-    def _latest(self, chat_id: int, arg: str) -> None:
+    def _latest(self, lang: str, chat_id: int, arg: str) -> None:
         try:
             count = int(arg) if arg else LATEST_DEFAULT
         except ValueError:
             count = 0
         if not 1 <= count <= LATEST_MAX:
-            self._reply(chat_id, f"Give a number from 1 to {LATEST_MAX}: /latest 5")
+            self._reply(chat_id, t(lang, "latest.bad_count", max=LATEST_MAX))
             return
         try:
             mods = self._bot.latest_approved(count)
         except CurseForgeError as e:
-            self._reply(chat_id, f"Could not query CurseForge: {escape(str(e))}")
+            self._reply(chat_id, t(lang, "curseforge_error", error=escape(str(e))))
             return
         if not mods:
-            self._reply(chat_id, "Found no approved WoW addons among the latest ids.")
+            self._reply(chat_id, t(lang, "latest.none"))
             return
         for mod in mods:
             caption, images = self._bot.render(mod)
@@ -209,14 +205,15 @@ class Commands:
                 self._telegram.send_addon(caption, images, chat_id=chat_id)
             except TelegramError as e:
                 log.error("could not send %s in reply to /latest: %s", mod.get("id"), e)
-                self._reply(chat_id, f"Could not send '{escape(mod.get('name') or '')}': {escape(str(e))}")
+                self._reply(
+                    chat_id, t(lang, "latest.send_failed", name=escape(mod.get("name") or ""), error=escape(str(e)))
+                )
                 return
             self._sleep(LATEST_PAUSE)
 
-    def _flavors(self, arg: str) -> str:
-        usage = "Set: /flavors forever,retail · no filter: /flavors all · as in settings: /flavors reset"
+    def _flavors(self, lang: str, arg: str) -> str:
         if not arg:
-            return f"Versions: {self._flavors_state()}\n{usage}"
+            return t(lang, "versions", state=self._flavors_state(lang)) + "\n" + t(lang, "flavors.usage")
         word = arg.lower()
         if word == "reset":
             self._bot.set_wanted(None)
@@ -226,30 +223,80 @@ class Commands:
             wanted = frozenset(part for part in word.replace(",", " ").split() if part)
             unknown = wanted - GROUPS
             if unknown:
-                return f"Unknown versions: {escape(', '.join(sorted(unknown)))}. Allowed: retail, classic, forever."
+                return t(lang, "flavors.unknown", names=escape(", ".join(sorted(unknown))))
             self._bot.set_wanted(wanted)
-        return f"Versions: {self._flavors_state()}"
+        return t(lang, "versions", state=self._flavors_state(lang))
+
+    def _lang_command(self, lang: str, chat_id: int, user_id: int, arg: str) -> None:
+        if arg:
+            self._set_lang(chat_id, user_id, arg.lower(), current=lang)
+            return
+        text = t(lang, "lang.current", name=LANGUAGE_NAMES[lang]) + "\n" + t(lang, "lang.choose")
+        buttons = [(LANGUAGE_NAMES[code], f"{LANG_BUTTON}{code}") for code in LANGUAGES]
+        self._reply(chat_id, text, buttons=buttons)
 
     # --- helpers ---
 
-    def _flavors_state(self) -> str:
+    def _set_lang(self, chat_id: int, user_id: int, code: str, current: str = DEFAULT) -> None:
+        if code not in LANGUAGES:
+            self._reply(chat_id, t(current, "lang.unknown", code=escape(code)))
+            return
+        self._storage.set_meta(LANG_KEY.format(user_id=user_id), code)
+        self._reply(chat_id, t(code, "lang.current", name=LANGUAGE_NAMES[code]))
+
+    def _lang(self, user: dict) -> str:
+        """The language chosen with /lang, or else the one of the user's Telegram client."""
+        chosen = self._storage.get_meta(LANG_KEY.format(user_id=user["id"]))
+        return chosen if chosen in LANGUAGES else pick(user.get("language_code"))
+
+    def _allowed(self, user: dict) -> bool:
+        user_id = user.get("id")
+        if user_id in self._admin_ids:
+            return True
+        if user_id not in self._strangers_logged:
+            self._strangers_logged.add(user_id)
+            log.info(
+                "message from a user who is not allowed, id=%s (@%s); to allow them, add the id to TELEGRAM_ADMIN_IDS",
+                user_id,
+                user.get("username"),
+            )
+        return False
+
+    def _flavors_state(self, lang: str) -> str:
         wanted = self._bot.wanted()
-        groups = ", ".join(title for group, title in _GROUP_TITLES.items() if group in wanted) or "all"
-        source = "set by /flavors" if self._bot.wanted_overridden() else "from settings"
+        groups = ", ".join(title for group, title in _GROUP_TITLES.items() if group in wanted) or t(lang, "flavors.all")
+        source = t(lang, "flavors.overridden" if self._bot.wanted_overridden() else "flavors.from_settings")
         return f"{groups} ({source})"
 
-    def _reply(self, chat_id: int, text: str) -> None:
+    def _reply(self, chat_id: int, text: str, buttons: list[tuple[str, str]] | None = None) -> None:
         try:
-            self._telegram.send_text(chat_id, text)
+            if buttons:
+                self._telegram.send_text(chat_id, text, buttons=buttons)
+            else:
+                self._telegram.send_text(chat_id, text)
         except TelegramError as e:
             log.error("could not reply in chat %s: %s", chat_id, e)
 
+    def _answer(self, callback_query_id: str | None) -> None:
+        if not callback_query_id:
+            return
+        try:
+            self._telegram.answer_callback_query(callback_query_id)
+        except TelegramError as e:
+            log.warning("could not answer a button press: %s", e)
 
-def _ago(delta: timedelta) -> str:
-    """Human-readable interval: "3 min", "5 h", "2 d"."""
+
+def _mod_status(lang: str, status) -> str:
+    if status in _KNOWN_STATUSES:
+        return t(lang, f"mod_status.{status}")
+    return t(lang, "mod_status.other", status=status)
+
+
+def _ago(lang: str, delta: timedelta) -> str:
+    """Human-readable interval: "3 min", "5 h", "2 d" (or "3 мин", "5 ч", "2 дн")."""
     minutes = max(int(delta.total_seconds() // 60), 0)
     if minutes < 60:
-        return f"{minutes} min"
+        return t(lang, "ago.min", n=minutes)
     if minutes < 48 * 60:
-        return f"{minutes // 60} h"
-    return f"{minutes // (24 * 60)} d"
+        return t(lang, "ago.h", n=minutes // 60)
+    return t(lang, "ago.d", n=minutes // (24 * 60))

@@ -134,13 +134,15 @@ def test_get_updates_long_polls_messages_only():
     updates = [{"update_id": 7, "message": {"text": "/status"}}]
     rec = Recorder((200, {"ok": True, "result": updates}))
     assert make_client(rec).get_updates(offset=5, timeout=30) == updates
-    assert rec.calls == [("getUpdates", {"offset": 5, "timeout": 30, "allowed_updates": ["message"]})]
+    assert rec.calls == [
+        ("getUpdates", {"offset": 5, "timeout": 30, "allowed_updates": ["message", "callback_query"]})
+    ]
 
 
 def test_get_updates_without_offset():
     rec = Recorder((200, {"ok": True, "result": []}))
     make_client(rec).get_updates(offset=None, timeout=10)
-    assert rec.calls == [("getUpdates", {"timeout": 10, "allowed_updates": ["message"]})]
+    assert rec.calls == [("getUpdates", {"timeout": 10, "allowed_updates": ["message", "callback_query"]})]
 
 
 def test_set_my_commands():
@@ -149,4 +151,27 @@ def test_set_my_commands():
     assert rec.calls == [
         ("setMyCommands", {"commands": [{"command": "status", "description": "Status"},
                                         {"command": "help", "description": "Help"}]})
+    ]
+
+
+def test_send_text_with_buttons():
+    rec = Recorder(OK)
+    make_client(rec).send_text(42, "Choose", buttons=[("English", "lang:en"), ("Русский", "lang:ru")])
+    payload = rec.calls[0][1]
+    assert payload["reply_markup"] == {
+        "inline_keyboard": [[{"text": "English", "callback_data": "lang:en"}, {"text": "Русский", "callback_data": "lang:ru"}]]
+    }
+
+
+def test_answer_callback_query():
+    rec = Recorder((200, {"ok": True, "result": True}))
+    make_client(rec).answer_callback_query("cb1")
+    assert rec.calls == [("answerCallbackQuery", {"callback_query_id": "cb1"})]
+
+
+def test_set_my_commands_for_a_language():
+    rec = Recorder((200, {"ok": True, "result": True}))
+    make_client(rec).set_my_commands([("help", "Справка")], language_code="ru")
+    assert rec.calls == [
+        ("setMyCommands", {"commands": [{"command": "help", "description": "Справка"}], "language_code": "ru"})
     ]

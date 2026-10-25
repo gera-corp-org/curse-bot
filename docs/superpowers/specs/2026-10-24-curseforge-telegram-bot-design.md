@@ -9,10 +9,15 @@ Telegram channel/chat: name, author, categories, supported game versions
 (Retail / Classic / Forever), a short description, a link and images (logo + screenshots).
 
 Commands in private messages (since 0.3.0), for users from `TELEGRAM_ADMIN_IDS` only:
-`/status`, `/latest [N]`, `/pending`, `/flavors`, `/help`. Incoming messages are fetched with
+`/status`, `/latest [N]`, `/pending`, `/flavors`, `/lang`, `/help`. Incoming messages are fetched with
 `getUpdates` (long polling, up to 30 s) instead of sleeping between CurseForge polls — in the
 same thread; the last processed update is stored in `meta.tg_offset`. The filter set with
 `/flavors` is stored in `meta.flavors` and overrides `FLAVORS`.
+
+Replies are in English or Russian (since 0.5.0, `bot/i18n.py`): the language chosen with `/lang`
+(or its buttons, delivered as `callback_query`) is stored per user in `meta.lang.<user_id>`;
+otherwise the client's `language_code` decides (`ru…` → Russian, else English). The command menu
+is registered for both languages. Channel posts and logs are not translated.
 
 Out of scope: notifications about updates of existing addons, per-user subscriptions,
 notifications that an addon later gained support for another game version.
@@ -66,6 +71,7 @@ curse_bot/
     formatter.py   — caption and image selection (pure functions)
     telegram.py    — Bot API: sending with fallback and 429 handling, getUpdates, setMyCommands
     commands.py    — private-chat commands and the long-polling wait between cycles
+    i18n.py        — reply texts in English and Russian
     main.py        — the polling loop, CLI flags
   scripts/probe.py — live check of the CurseForge API
   charts/curse-bot — Helm chart

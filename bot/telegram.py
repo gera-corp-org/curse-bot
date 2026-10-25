@@ -53,22 +53,32 @@ class TelegramClient:
                 error = e
         raise error
 
-    def send_text(self, chat_id: int | str, text: str) -> None:
-        self._call(
-            "sendMessage",
-            {"chat_id": chat_id, "text": text, "parse_mode": "HTML", "link_preview_options": {"is_disabled": True}},
-        )
+    def send_text(self, chat_id: int | str, text: str, buttons: list[tuple[str, str]] | None = None) -> None:
+        """A text message; buttons are (label, callback data) pairs shown in one row under it."""
+        payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML", "link_preview_options": {"is_disabled": True}}
+        if buttons:
+            payload["reply_markup"] = {
+                "inline_keyboard": [[{"text": label, "callback_data": data} for label, data in buttons]]
+            }
+        self._call("sendMessage", payload)
+
+    def answer_callback_query(self, callback_query_id: str) -> None:
+        """Confirm a button press, so the client stops showing a spinner on it."""
+        self._call("answerCallbackQuery", {"callback_query_id": callback_query_id})
 
     def get_updates(self, offset: int | None, timeout: int) -> list[dict]:
         """Long polling for incoming messages: Telegram holds the request for up to timeout seconds."""
-        payload: dict = {"timeout": timeout, "allowed_updates": ["message"]}
+        payload: dict = {"timeout": timeout, "allowed_updates": ["message", "callback_query"]}
         if offset is not None:
             payload = {"offset": offset, **payload}
         return self._call("getUpdates", payload, read_timeout=timeout + 15)
 
-    def set_my_commands(self, commands: list[tuple[str, str]]) -> None:
-        """Command menu in the Telegram client."""
-        self._call("setMyCommands", {"commands": [{"command": c, "description": d} for c, d in commands]})
+    def set_my_commands(self, commands: list[tuple[str, str]], language_code: str | None = None) -> None:
+        """Command menu in the Telegram client; language_code — for clients in that language."""
+        payload: dict = {"commands": [{"command": c, "description": d} for c, d in commands]}
+        if language_code:
+            payload["language_code"] = language_code
+        self._call("setMyCommands", payload)
 
     def _call(self, method: str, payload: dict, read_timeout: float | None = None) -> dict:
         for attempt in range(MAX_429_RETRIES + 1):

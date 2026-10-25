@@ -56,7 +56,12 @@ have access, `/help` shows it too.
 | `/latest [N]` | the N latest approved addons (3 by default, 10 at most) — to your private chat, not the channel |
 | `/pending` | the moderation queue: up to 20 addons, each with its status and how long it has waited |
 | `/flavors` | show the version filter; `/flavors forever,retail` sets it, `all` removes it, `reset` restores the configured one |
+| `/lang` | reply language: `/lang en`, `/lang ru`, or buttons under `/lang` |
 | `/help` | the list of commands and your id |
+
+The bot replies in the language chosen with `/lang` (remembered per user), or else in the
+language of your Telegram client: Russian for `ru`, English otherwise. The command menu is
+registered in both languages. Channel posts and logs are not translated.
 
 A filter set with `/flavors` is stored in the database and overrides `FLAVORS` from the settings.
 The bot long-polls incoming messages (`getUpdates`) between CurseForge cycles, so only one
