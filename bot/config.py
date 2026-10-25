@@ -1,4 +1,4 @@
-"""Настройки бота из переменных окружения."""
+"""Bot settings from environment variables."""
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -18,11 +18,11 @@ class Config:
     curseforge_api_key: str = field(repr=False)
     telegram_bot_token: str = field(repr=False)
     telegram_chat_id: str
-    flavors: frozenset[str]  # пусто — сообщать обо всех версиях
+    flavors: frozenset[str]  # empty - report all versions
     poll_interval: int
     db_path: Path
-    heartbeat_file: Path | None = None  # файл для liveness-пробы; None — не писать
-    admin_ids: frozenset[int] = frozenset()  # кому бот отвечает на команды; пусто — команды выключены
+    heartbeat_file: Path | None = None  # file for the liveness probe; None - do not write
+    admin_ids: frozenset[int] = frozenset()  # who the bot answers commands for; empty - commands disabled
 
 
 def load_config(env: Mapping[str, str] | None = None) -> Config:
@@ -30,13 +30,13 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
 
     missing = [name for name in REQUIRED if not env.get(name, "").strip()]
     if missing:
-        raise ConfigError(f"Не заданы обязательные переменные: {', '.join(missing)}")
+        raise ConfigError(f"Required variables are not set: {', '.join(missing)}")
 
     flavors = frozenset(f.strip().lower() for f in env.get("FLAVORS", "").split(",") if f.strip())
     unknown = flavors - GROUPS
     if unknown:
         raise ConfigError(
-            f"Неизвестные значения FLAVORS: {', '.join(sorted(unknown))}; допустимо: retail, classic, forever"
+            f"Unknown FLAVORS values: {', '.join(sorted(unknown))}; allowed: retail, classic, forever"
         )
 
     try:
@@ -44,12 +44,12 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
     except ValueError:
         poll_interval = 0
     if poll_interval <= 0:
-        raise ConfigError("POLL_INTERVAL должен быть положительным целым числом секунд")
+        raise ConfigError("POLL_INTERVAL must be a positive integer number of seconds")
 
     try:
         admin_ids = frozenset(int(i) for i in env.get("TELEGRAM_ADMIN_IDS", "").split(",") if i.strip())
     except ValueError:
-        raise ConfigError("TELEGRAM_ADMIN_IDS — числовые id пользователей Telegram через запятую") from None
+        raise ConfigError("TELEGRAM_ADMIN_IDS must be comma-separated numeric Telegram user ids") from None
 
     return Config(
         curseforge_api_key=env["CURSEFORGE_API_KEY"].strip(),

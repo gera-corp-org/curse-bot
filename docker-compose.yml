@@ -1,12 +1,12 @@
 services:
   bot:
     build: .
-    init: true  # PID 1 пробрасывает SIGTERM, docker stop не ждёт 10 с до SIGKILL
+    init: true  # PID 1 forwards SIGTERM, so docker stop does not wait 10 s for SIGKILL
     env_file: .env
     environment:
       DB_PATH: /data/bot.db
       HEARTBEAT_FILE: /tmp/heartbeat
-    # те же ограничения, что у пода в кластере
+    # the same restrictions as the pod in the cluster
     read_only: true
     tmpfs:
       - /tmp:size=16m,mode=1777
@@ -16,11 +16,11 @@ services:
     mem_limit: 128m
     pids_limit: 64
     volumes:
-      # именованный том: Docker создаёт его с владельцем из образа (65532),
-      # под которым работает процесс
+      # a named volume: Docker creates it owned by the image's user (65532),
+      # which the process runs as
       - botdata:/data
     healthcheck:
-      # в образе нет shell — проверка на python: heartbeat не старше 2 × POLL_INTERVAL + 300
+      # the image has no shell, so the check is python: heartbeat no older than 2 × POLL_INTERVAL + 300
       test: ["CMD", "python3", "-c", "import os, sys, time; sys.exit(time.time() - os.stat('/tmp/heartbeat').st_mtime > 2 * int(os.environ.get('POLL_INTERVAL') or 600) + 300)"]
       interval: 60s
       timeout: 10s

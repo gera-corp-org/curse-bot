@@ -1,10 +1,10 @@
-"""Клиент CurseForge API — только запросы, нужные боту."""
+"""CurseForge API client - only the requests the bot needs."""
 import httpx
 
 API_URL = "https://api.curseforge.com"
 WOW_GAME_ID = 1
-BATCH_SIZE = 1000  # максимум id в одном POST /v1/mods
-SCAN_START_ID = 1_000_000  # заведомо существующий id, от него ищем текущий максимум
+BATCH_SIZE = 1000  # max ids in one POST /v1/mods
+SCAN_START_ID = 1_000_000  # an id known to exist; the search for the current maximum starts from it
 
 
 class CurseForgeError(Exception):
@@ -20,7 +20,7 @@ class CurseForgeClient:
         return self._request("GET", f"/v1/games/{WOW_GAME_ID}/version-types")
 
     def get_mods(self, mod_ids: list[int]) -> list[dict]:
-        """Аддоны по id (любых игр); несуществующие id в ответе просто отсутствуют."""
+        """Addons by id (any game); nonexistent ids are simply absent from the response."""
         mods: list[dict] = []
         for start in range(0, len(mod_ids), BATCH_SIZE):
             chunk = mod_ids[start : start + BATCH_SIZE]
@@ -28,10 +28,10 @@ class CurseForgeClient:
         return mods
 
     def find_max_id(self) -> int:
-        """Текущий наибольший id аддона: экспоненциальный поиск окном BATCH_SIZE, затем бинарный."""
+        """Current highest addon id: exponential search in BATCH_SIZE windows, then binary search."""
         lo = SCAN_START_ID
         if not self._window(lo):
-            raise CurseForgeError(f"CurseForge не вернул аддонов в окне с id {lo}")
+            raise CurseForgeError(f"CurseForge returned no addons in the window starting at id {lo}")
         hi = lo * 2
         while self._window(hi):
             lo, hi = hi, hi * 2
@@ -52,17 +52,17 @@ class CurseForgeClient:
         try:
             response = self._http.request(method, path, params=params, json=json, headers=self._headers)
         except httpx.HTTPError as e:
-            raise CurseForgeError(f"CurseForge недоступен: {e}") from e
+            raise CurseForgeError(f"CurseForge is unreachable: {e}") from e
         if response.status_code == 404 and empty_on_404:
-            return []  # ни одного из запрошенных id не существует
+            return []  # none of the requested ids exist
         if response.status_code == 403:
-            raise CurseForgeError("CurseForge ответил 403: неверный или отозванный API-ключ")
+            raise CurseForgeError("CurseForge responded 403: invalid or revoked API key")
         if response.status_code != 200:
-            raise CurseForgeError(f"CurseForge ответил {response.status_code}: {response.text[:200]}")
+            raise CurseForgeError(f"CurseForge responded {response.status_code}: {response.text[:200]}")
         try:
             data = response.json()["data"]
         except (ValueError, KeyError, TypeError) as e:
-            raise CurseForgeError("CurseForge вернул некорректный ответ") from e
+            raise CurseForgeError("CurseForge returned an invalid response") from e
         if not isinstance(data, list):
-            raise CurseForgeError("CurseForge вернул некорректный ответ")
+            raise CurseForgeError("CurseForge returned an invalid response")
         return data

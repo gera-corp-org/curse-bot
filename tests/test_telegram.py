@@ -17,7 +17,7 @@ def fail(code=400, description="Bad Request", **parameters):
 
 
 class Recorder:
-    """Фейковый Telegram: отдаёт заготовленные ответы по очереди и запоминает запросы."""
+    """Fake Telegram: returns canned responses in order and records requests."""
 
     def __init__(self, *responses):
         self.responses = list(responses)
@@ -103,7 +103,7 @@ def test_network_error_does_not_leak_token():
 
     with pytest.raises(TelegramError) as info:
         make_client(handler).send_addon("cap", [])
-    assert "недоступен" in str(info.value)
+    assert "unreachable" in str(info.value)
     assert "TOKEN" not in str(info.value)
 
 
@@ -145,8 +145,8 @@ def test_get_updates_without_offset():
 
 def test_set_my_commands():
     rec = Recorder((200, {"ok": True, "result": True}))
-    make_client(rec).set_my_commands([("status", "Состояние"), ("help", "Справка")])
+    make_client(rec).set_my_commands([("status", "Status"), ("help", "Help")])
     assert rec.calls == [
-        ("setMyCommands", {"commands": [{"command": "status", "description": "Состояние"},
-                                        {"command": "help", "description": "Справка"}]})
+        ("setMyCommands", {"commands": [{"command": "status", "description": "Status"},
+                                        {"command": "help", "description": "Help"}]})
     ]

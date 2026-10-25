@@ -1,4 +1,4 @@
-"""Версии WoW: gameVersionTypeId из CurseForge → группа (Retail/Classic/Forever) и метка."""
+"""WoW versions: CurseForge gameVersionTypeId -> group (Retail/Classic/Forever) and label."""
 import logging
 from dataclasses import dataclass
 
@@ -15,11 +15,11 @@ _GROUP_TITLES = {RETAIL: "Retail", CLASSIC: "Classic", FOREVER: "Forever"}
 
 @dataclass(frozen=True)
 class Flavor:
-    group: str | None  # None — тип не отнесён ни к одной группе
-    label: str  # для Classic — короткое имя версии ("Era", "MoP")
+    group: str | None  # None - the type belongs to no group
+    label: str  # for Classic - short version name ("Era", "MoP")
 
 
-# ID из https://api.curseforge.com/v1/games/1/version-types (сверено с instawow).
+# IDs from https://api.curseforge.com/v1/games/1/version-types (checked against instawow).
 KNOWN_TYPES: dict[int, Flavor] = {
     517: Flavor(RETAIL, "Retail"),
     67408: Flavor(CLASSIC, "Era"),
@@ -35,7 +35,7 @@ _CLASSIC_ORDER = [f.label for f in KNOWN_TYPES.values() if f.group == CLASSIC]
 
 
 def build_flavor_map(version_types: list[dict]) -> dict[int, Flavor]:
-    """Встроенная таблица + типы из ответа API, которых в ней нет (распознаются по имени)."""
+    """Built-in table + types from the API response that are missing from it (recognized by name)."""
     result = dict(KNOWN_TYPES)
     for vt in version_types:
         type_id = vt.get("id")
@@ -49,13 +49,13 @@ def build_flavor_map(version_types: list[dict]) -> dict[int, Flavor]:
             flavor = Flavor(CLASSIC, name)
         else:
             flavor = Flavor(None, name)
-        log.warning("unknown version type %s (%s) → %s", type_id, name, flavor.group or "без группы")
+        log.warning("unknown version type %s (%s) → %s", type_id, name, flavor.group or "no group")
         result[type_id] = flavor
     return result
 
 
 def mod_flavors(mod: dict, flavor_map: dict[int, Flavor]) -> list[Flavor]:
-    """Уникальные версии игры, под которые у аддона есть файлы, в порядке показа."""
+    """Unique game versions the addon has files for, in display order."""
     found: dict[Flavor, None] = {}
     for index in mod.get("latestFilesIndexes") or []:
         type_id = index.get("gameVersionTypeId")
@@ -66,12 +66,12 @@ def mod_flavors(mod: dict, flavor_map: dict[int, Flavor]) -> list[Flavor]:
 
 
 def passes_filter(flavors: list[Flavor], wanted: frozenset[str]) -> bool:
-    """Пустой фильтр пропускает всё; иначе нужна хотя бы одна группа из wanted."""
+    """An empty filter lets everything through; otherwise at least one group from wanted is required."""
     return not wanted or any(f.group in wanted for f in flavors)
 
 
 def format_flavors(flavors: list[Flavor]) -> str:
-    """'Retail · Classic (Era, MoP) · Forever'; пустая строка, если версий нет."""
+    """'Retail · Classic (Era, MoP) · Forever'; empty string if there are no versions."""
     parts = []
     for group in _GROUP_ORDER:
         labels = [f.label for f in flavors if f.group == group]

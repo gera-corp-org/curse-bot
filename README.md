@@ -1,69 +1,72 @@
 # curse_bot
 
-Telegram-бот, который следит за новыми аддонами World of Warcraft на CurseForge и публикует
-каждый в канал: альбом (логотип + скриншоты), название, автор, категории, версии игры
-(Retail / Classic / Forever), краткое описание и ссылка.
+**English** | [Русский](README.ru.md)
 
-## Подготовка
+A Telegram bot that watches CurseForge for new World of Warcraft addons and posts each one
+to a channel: an album (logo + screenshots), name, author, categories, game versions
+(Retail / Classic / Forever), a short description and a link.
 
-1. Ключ CurseForge API — https://console.curseforge.com.
-2. Бот — у @BotFather, получить токен.
-3. Добавить бота администратором канала (право публиковать сообщения).
-4. `cp .env.example .env` и заполнить. `TELEGRAM_CHAT_ID` — `@имя_канала` или числовой id `-100…`.
-   Ключ CurseForge содержит `$` — возьмите его в **одинарные** кавычки
-   (`CURSEFORGE_API_KEY='$2a$10$…'`), иначе `uv` и `docker compose` испортят значение
-   подстановкой переменных и CurseForge ответит 403.
+## Setup
 
-`FLAVORS` — о каких версиях сообщать (`retail`, `classic`, `forever` через запятую; пусто — обо всех).
-Аддон проходит фильтр, если у него есть файлы хотя бы под одну из этих версий на момент одобрения.
+1. A CurseForge API key — https://console.curseforge.com.
+2. A bot — get a token from @BotFather.
+3. Make the bot an admin of the channel (with the right to post messages).
+4. `cp .env.example .env` and fill it in. `TELEGRAM_CHAT_ID` is `@channel_name` or a numeric id `-100…`.
+   The CurseForge key contains `$` — wrap it in **single** quotes
+   (`CURSEFORGE_API_KEY='$2a$10$…'`), otherwise `uv` and `docker compose` mangle the value with
+   variable substitution and CurseForge answers 403.
 
-Как бот находит новые аддоны: поиск CurseForge для обычных ключей закрыт, поэтому бот
-просматривает новые ID проектов (они растут по порядку), берёт проекты WoW и объявляет
-каждый, когда модераторы CurseForge его одобрят. Сейчас это ~200 аддонов в сутки —
-сузить поток можно через `FLAVORS`.
+`FLAVORS` selects which versions to announce (`retail`, `classic`, `forever`, comma-separated;
+empty means all). An addon passes the filter if, when it is approved, it has files for at least
+one of these versions.
 
-## Запуск в Docker
+How the bot finds new addons: CurseForge search is closed to regular API keys, so the bot
+walks new project ids (they grow in order), keeps the WoW projects and announces each one
+once CurseForge moderators approve it. That is about 200 addons a day right now — narrow the
+stream with `FLAVORS`.
+
+## Running in Docker
 
 ```bash
 docker compose up -d --build
 docker compose logs -f
 ```
 
-Состояние (курсор и список ожидающих модерации) лежит в томе `botdata` (`/data/bot.db`
-в контейнере). При самом первом
-запуске бот только находит текущий последний ID проекта на CurseForge (`baseline` в логе)
-и ничего не отправляет — уведомления пойдут о проектах, созданных после этого.
+The state (the id cursor and the moderation queue) lives in the `botdata` volume (`/data/bot.db`
+in the container). On its very first start the bot only finds the current highest CurseForge
+project id (`baseline` in the log) and sends nothing — notifications cover projects created
+after that.
 
-Проверка отправки (разово шлёт 2 последних аддона, базу не трогает):
+Test sending (posts the 2 latest addons once, leaves the database alone):
 
 ```bash
 docker compose run --rm bot --send-latest 2
 ```
 
-## Команды в Telegram
+## Telegram commands
 
-Бот отвечает в личных сообщениях только пользователям из `TELEGRAM_ADMIN_IDS`
-(в чарте — `config.adminIds`). Остальным он не отвечает, а в лог пишет их id:
-`сообщение от неразрешённого пользователя id=…`. Так можно узнать свой id. Ещё его
-показывает `/help`, когда доступ уже есть.
+The bot answers private messages only from users listed in `TELEGRAM_ADMIN_IDS`
+(`config.adminIds` in the chart). It does not answer anyone else, but logs their id:
+`message from a user who is not allowed, id=…`. That is how you find your own id; once you
+have access, `/help` shows it too.
 
-| Команда | Что делает |
+| Command | What it does |
 |---|---|
-| `/status` | последний опрос, курсор id, сколько ждёт модерации, сколько отправлено в канал за 24 ч, фильтр версий |
-| `/latest [N]` | N последних одобренных аддонов (по умолчанию 3, максимум 10) — в личку, не в канал |
-| `/pending` | очередь модерации: до 20 аддонов, у каждого статус и сколько ждёт |
-| `/flavors` | показать фильтр версий; `/flavors forever,retail` — задать, `all` — без фильтра, `reset` — как в настройках |
-| `/help` | список команд и ваш id |
+| `/status` | last poll, id cursor, how many addons await moderation, how many were posted to the channel in 24 h, version filter |
+| `/latest [N]` | the N latest approved addons (3 by default, 10 at most) — to your private chat, not the channel |
+| `/pending` | the moderation queue: up to 20 addons, each with its status and how long it has waited |
+| `/flavors` | show the version filter; `/flavors forever,retail` sets it, `all` removes it, `reset` restores the configured one |
+| `/help` | the list of commands and your id |
 
-Фильтр, заданный командой `/flavors`, хранится в базе и перекрывает `FLAVORS` из настроек.
-Входящие сообщения бот забирает long polling'ом (`getUpdates`) между опросами
-CurseForge. Поэтому с одним токеном бота может работать только один экземпляр.
+A filter set with `/flavors` is stored in the database and overrides `FLAVORS` from the settings.
+The bot long-polls incoming messages (`getUpdates`) between CurseForge cycles, so only one
+instance may run per bot token.
 
 ## Kubernetes (Helm)
 
-Образ `ghcr.io/gera-corp-org/curse-bot` и чарт `oci://ghcr.io/gera-corp-org/charts/curse-bot`
-публикуются из CI. Секреты по умолчанию берутся из Vault через bank-vaults
-vault-secrets-webhook (в Kubernetes Secret они не попадают):
+The image `ghcr.io/gera-corp-org/curse-bot` and the chart `oci://ghcr.io/gera-corp-org/charts/curse-bot`
+are published by CI. By default secrets come from Vault through the bank-vaults
+vault-secrets-webhook (they never land in a Kubernetes Secret):
 
 ```bash
 vault kv put secret/curse-bot \
@@ -71,66 +74,66 @@ vault kv put secret/curse-bot \
 helm install curse-bot oci://ghcr.io/gera-corp-org/charts/curse-bot -n curse-bot --create-namespace
 ```
 
-Без Vault — готовый Secret с теми же тремя ключами:
-`--set vault.enabled=false --set existingSecret=<имя>`. Остальные настройки — в
+Without Vault, use an existing Secret with the same three keys:
+`--set vault.enabled=false --set existingSecret=<name>`. Other settings are in
 [`charts/curse-bot/values.yaml`](charts/curse-bot/values.yaml) (`config.flavors`,
-`config.pollInterval`, `persistence.*`).
+`config.pollInterval`, `config.adminIds`, `persistence.*`).
 
-Бот должен работать в одном экземпляре: два экземпляра (например, в кластере и в
-`docker compose`) отправят каждый аддон дважды.
+Run a single instance: two instances (say, in the cluster and in `docker compose`) post every
+addon twice.
 
-## Релизы
+## Releases
 
 ```bash
-git tag v0.2.0 && git push origin v0.2.0
+git tag v0.4.0 && git push origin v0.4.0
 ```
 
-Тег запускает CI: тесты → образ `0.2.0` (amd64 + arm64) → чарт `0.2.0` в GHCR →
-GitHub Release с автоматическими заметками. Чарт публикуется только после образа,
-поэтому ArgoCD с `targetRevision: 0.*` не увидит версию без образа. Каждый пуш в
-`master` собирает образ `latest` и `sha-<коммит>`.
+The tag runs CI: tests → image `0.4.0` (amd64 + arm64) → chart `0.4.0` in GHCR → a GitHub
+Release with generated notes. The chart is published only after the image, so ArgoCD with
+`targetRevision: 0.*` never sees a version without an image. Every push to `master` builds the
+images `latest` and `sha-<commit>`.
 
-## Безопасность
+## Security
 
-**Образ**:
-- `gcr.io/distroless/python3-debian13:nonroot`: нет shell, пакетного менеджера и `pip`;
-- процесс работает от uid 65532;
-- код и зависимости принадлежат root и доступны только на чтение, байт-код скомпилирован заранее;
-- писать можно только в `/data`;
-- базовые образы закреплены по digest, GitHub Actions — по SHA; обновляет их Dependabot.
+**Image**:
+- `gcr.io/distroless/python3-debian13:nonroot`: no shell, package manager or `pip`;
+- the process runs as uid 65532;
+- code and dependencies are owned by root and read-only, bytecode is precompiled;
+- `/data` is the only writable path;
+- base images are pinned by digest and GitHub Actions by SHA; Dependabot keeps them current.
 
 **CI**:
-- hadolint проверяет Dockerfile;
-- к образу прикладываются SBOM и provenance;
-- аттестация Sigstore;
-- Trivy отправляет отчёт в GitHub Security, а `CRITICAL` останавливает выпуск: без образа не выйдет и чарт.
+- hadolint checks the Dockerfile;
+- an SBOM and provenance are attached to the image;
+- a Sigstore attestation;
+- Trivy reports to GitHub Security, and a `CRITICAL` finding stops the release: no image, no chart.
 
-Проверить происхождение образа:
+Verify where an image came from:
 
 ```bash
-gh attestation verify oci://ghcr.io/gera-corp-org/curse-bot:0.2.0 -o gera-corp-org
+gh attestation verify oci://ghcr.io/gera-corp-org/curse-bot:0.4.0 -o gera-corp-org
 ```
 
-**Под** (чарт):
-- проходит Pod Security `restricted`: `runAsNonRoot`, read-only корень, `drop: ALL`,
-  `seccomp: RuntimeDefault`, без повышения привилегий;
-- `/tmp` в памяти, лимиты памяти и `ephemeral-storage`;
-- токен ServiceAccount монтируется только для vault-env;
-- NetworkPolicy закрывает весь входящий трафик, исходящий разрешён только на DNS и TCP 443;
-- liveness-проба перезапускает контейнер, если цикл опроса завис: смотрит на возраст `/tmp/heartbeat`;
-- чарт отказывается рендериться с uid 0, без `runAsNonRoot` или без read-only корня.
+**Pod** (chart):
+- passes Pod Security `restricted`: `runAsNonRoot`, read-only root, `drop: ALL`,
+  `seccomp: RuntimeDefault`, no privilege escalation;
+- `/tmp` in memory, memory and `ephemeral-storage` limits;
+- the ServiceAccount token is mounted only for vault-env;
+- a NetworkPolicy denies all ingress and allows egress only to DNS and TCP 443;
+- a liveness probe restarts the container if the polling loop hangs, by checking the age of `/tmp/heartbeat`;
+- the chart refuses to render with uid 0, without `runAsNonRoot` or without a read-only root.
 
-В `docker compose` те же ограничения: `read_only`, `cap_drop: ALL`, `no-new-privileges`,
-лимиты памяти и процессов, healthcheck по heartbeat.
+`docker compose` applies the same restrictions: `read_only`, `cap_drop: ALL`, `no-new-privileges`,
+memory and process limits, a heartbeat healthcheck.
 
-## Запуск без Docker
+## Running without Docker
 
 ```bash
 uv sync
 uv run --env-file .env python -m bot
 ```
 
-Пример юнита systemd (`/etc/systemd/system/curse-bot.service`), путь и пользователя подставить свои:
+A sample systemd unit (`/etc/systemd/system/curse-bot.service`); adjust the path and user:
 
 ```ini
 [Unit]
@@ -149,11 +152,11 @@ RestartSec=30
 WantedBy=multi-user.target
 ```
 
-## Разработка
+## Development
 
 ```bash
 uv run pytest
-uv run --env-file .env python -m scripts.probe   # живая проверка CurseForge API
-# после изменения зависимостей — обновить requirements.txt для образа (CI это проверяет):
+uv run --env-file .env python -m scripts.probe   # live check of the CurseForge API
+# after changing dependencies, refresh requirements.txt for the image (CI checks it):
 uv export --no-dev --no-emit-project --no-header --format requirements-txt -o requirements.txt
 ```

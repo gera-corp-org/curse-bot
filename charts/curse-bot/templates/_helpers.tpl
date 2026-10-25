@@ -43,7 +43,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 {{- end }}
 
-{{/* Аннотации для bank-vaults vault-secrets-webhook и vault-secrets-reloader. */}}
+{{/* Annotations for the bank-vaults vault-secrets-webhook and vault-secrets-reloader. */}}
 {{- define "curse-bot.vaultAnnotations" -}}
 {{- with .Values.vault }}
 {{- if .enabled }}

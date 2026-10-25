@@ -1,6 +1,6 @@
-# Базовые образы в Dockerfile закреплены по digest, actions — по SHA: без Dependabot
-# они бы так и остались старыми. Python-зависимости обновляются вручную (uv lock),
-# потому что вместе с uv.lock надо пересоздать requirements.txt — CI это проверяет.
+# Base images in the Dockerfile are pinned by digest and actions by SHA: without Dependabot
+# they would stay old forever. Python dependencies are updated by hand (uv lock), because
+# requirements.txt has to be regenerated together with uv.lock — CI checks that.
 version: 2
 updates:
   - package-ecosystem: docker

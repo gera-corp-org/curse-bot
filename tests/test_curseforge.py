@@ -24,7 +24,7 @@ def test_version_types_request():
 
 def test_403_explains_key():
     client = client_with(lambda request: httpx.Response(403))
-    with pytest.raises(CurseForgeError, match="API-ключ"):
+    with pytest.raises(CurseForgeError, match="API key"):
         client.version_types()
 
 
@@ -38,7 +38,7 @@ def test_network_error():
     def handler(request):
         raise httpx.ConnectError("boom")
 
-    with pytest.raises(CurseForgeError, match="недоступен"):
+    with pytest.raises(CurseForgeError, match="unreachable"):
         client_with(handler).version_types()
 
 
@@ -47,18 +47,18 @@ def test_network_error():
     httpx.Response(200, json={"oops": 1}),
 ])
 def test_malformed_response(response):
-    with pytest.raises(CurseForgeError, match="некорректный"):
+    with pytest.raises(CurseForgeError, match="invalid response"):
         client_with(lambda request: response).version_types()
 
 
 @pytest.mark.parametrize("body", [{"data": None}, {"data": {}}])
 def test_non_list_data_is_error(body):
-    with pytest.raises(CurseForgeError, match="некорректный"):
+    with pytest.raises(CurseForgeError, match="invalid response"):
         client_with(lambda request: httpx.Response(200, json=body)).version_types()
 
 
 def get_mods_handler(existing, requests=None):
-    """Фейковый API: отдаёт только существующие id, а если их нет совсем — 404."""
+    """Fake API: returns only existing ids, and 404 if none exist at all."""
     def handler(request):
         if requests is not None:
             requests.append(request)
@@ -100,7 +100,7 @@ def test_get_mods_empty_input_makes_no_request():
 
 
 def test_get_mods_403_explains_key():
-    with pytest.raises(CurseForgeError, match="API-ключ"):
+    with pytest.raises(CurseForgeError, match="API key"):
         client_with(lambda request: httpx.Response(403)).get_mods([1])
 
 
@@ -113,18 +113,18 @@ def test_get_mods_network_error():
     def handler(request):
         raise httpx.ConnectError("boom")
 
-    with pytest.raises(CurseForgeError, match="недоступен"):
+    with pytest.raises(CurseForgeError, match="unreachable"):
         client_with(handler).get_mods([1])
 
 
 def test_get_mods_malformed_response():
-    with pytest.raises(CurseForgeError, match="некорректный"):
+    with pytest.raises(CurseForgeError, match="invalid response"):
         client_with(lambda request: httpx.Response(200, json={"data": {}})).get_mods([1])
 
 
 @pytest.mark.parametrize("top", [1_000_500, 1_763_684, 1_999_999, 2_000_000, 2_300_123])
 def test_find_max_id_with_gaps(top):
-    existing = {i for i in range(1, top + 1) if i % 6 != 0}  # ~17% дыр
+    existing = {i for i in range(1, top + 1) if i % 6 != 0}  # ~17% gaps
     existing.add(top)
     assert client_with(get_mods_handler(existing)).find_max_id() == top
 

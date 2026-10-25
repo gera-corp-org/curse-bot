@@ -1,4 +1,4 @@
-"""Фейковые CurseForge и Telegram и сборка Bot для тестов."""
+"""Fake CurseForge and Telegram, and Bot assembly for tests."""
 from datetime import UTC, datetime
 
 from bot.flavors import build_flavor_map
@@ -28,7 +28,7 @@ def mod(mod_id, *type_ids, game=1, status=4, available=True, files=True):
 
 
 def new(mod_id, *type_ids, **kwargs):
-    """Аддон на модерации: status 1, isAvailable false."""
+    """Addon in moderation: status 1, isAvailable false."""
     return mod(mod_id, *type_ids, status=1, available=False, **kwargs)
 
 
@@ -52,13 +52,13 @@ class FakeCurseForge:
 
 class FakeTelegram:
     def __init__(self, fail_times=0, updates=None, on_poll=None):
-        self.sent = []  # публикации в канал: (caption, images)
-        self.private = []  # аддоны в личный чат: (chat_id, caption, images)
-        self.texts = []  # текстовые ответы: (chat_id, text)
+        self.sent = []  # channel publications: (caption, images)
+        self.private = []  # addons sent to a private chat: (chat_id, caption, images)
+        self.texts = []  # text replies: (chat_id, text)
         self.fail_times = fail_times
-        self.updates = list(updates or [])  # пачки для getUpdates (или исключения)
+        self.updates = list(updates or [])  # batches for getUpdates (or exceptions)
         self.polls = []  # (offset, timeout)
-        self.on_poll = on_poll  # вызывается с timeout — двигать фейковые часы
+        self.on_poll = on_poll  # called with timeout - advances the fake clock
         self.menu = None
 
     def send_addon(self, caption, images, chat_id=None):
@@ -77,9 +77,9 @@ class FakeTelegram:
         self.polls.append((offset, timeout))
         batch = self.updates.pop(0) if self.updates else []
         if isinstance(batch, Exception):
-            raise batch  # ошибка возвращается сразу, без ожидания
+            raise batch  # the error is returned immediately, without waiting
         if self.on_poll:
-            self.on_poll(timeout)  # пустой long poll держится весь timeout
+            self.on_poll(timeout)  # an empty long poll lasts the whole timeout
         return batch
 
     def set_my_commands(self, commands):
@@ -111,7 +111,7 @@ def make_bot(curseforge, telegram=None, storage=None, wanted=frozenset(), sleep=
 
 
 def started(*mods, cursor=None, **kwargs):
-    """Бот после baseline: курсор стоит сразу за последним из mods (или на cursor)."""
+    """Bot after baseline: the cursor sits right after the last of mods (or at cursor)."""
     curseforge = FakeCurseForge(*mods)
     storage = kwargs.setdefault("storage", Storage(":memory:"))
     storage.set_meta("next_id", str(cursor if cursor is not None else max(curseforge.mods) + 1))

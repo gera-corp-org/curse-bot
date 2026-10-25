@@ -57,7 +57,7 @@ def test_caption_skips_empty_parts():
 def test_long_summary_truncated_to_limit():
     caption = caption_of(make_mod(summary="&" * 3000))
     assert tg_len(caption) <= CAPTION_LIMIT
-    assert "&amp;…" in caption  # обрезано по исходному тексту, сущность целая
+    assert "&amp;…" in caption  # truncated by the source text, entity intact
     assert caption.startswith("🆕 <b>Mistweaver Teachings Bar</b>\n")
     assert caption.endswith(f"🔗 {URL}")
 

@@ -1,9 +1,9 @@
 apiVersion: v2
 name: curse-bot
-description: Новые аддоны World of Warcraft с CurseForge в Telegram-канал
+description: New World of Warcraft addons from CurseForge posted to a Telegram channel
 type: application
-# Версии ниже — для установки из исходников. При публикации CI подставляет
-# в version и appVersion номер из git-тега (v1.2.3 -> 1.2.3).
+# The versions below are for installing from source. When publishing, CI sets
+# version and appVersion to the number from the git tag (v1.2.3 -> 1.2.3).
 version: 0.0.0-dev
 appVersion: "latest"
 home: https://github.com/gera-corp-org/curse-bot

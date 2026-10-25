@@ -1,4 +1,4 @@
-"""Отправка уведомлений через Telegram Bot API."""
+"""Sending notifications via the Telegram Bot API."""
 import logging
 import time
 from collections.abc import Callable
@@ -29,9 +29,9 @@ class TelegramClient:
         self._sleep = sleep
 
     def send_addon(self, caption: str, images: list[str], chat_id: int | str | None = None) -> None:
-        """Альбом → фото логотипа → текст; следующий вариант — только если предыдущий не прошёл.
+        """Album -> logo photo -> text; the next option is tried only if the previous one failed.
 
-        По умолчанию — в канал из настроек; chat_id — в другой чат (ответ на /latest).
+        By default to the channel from settings; chat_id sends to another chat (reply to /latest).
         """
         chat = self._chat_id if chat_id is None else chat_id
         attempts: list[tuple[str, dict]] = []
@@ -60,14 +60,14 @@ class TelegramClient:
         )
 
     def get_updates(self, offset: int | None, timeout: int) -> list[dict]:
-        """Long polling входящих сообщений: Telegram держит запрос до timeout секунд."""
+        """Long polling for incoming messages: Telegram holds the request for up to timeout seconds."""
         payload: dict = {"timeout": timeout, "allowed_updates": ["message"]}
         if offset is not None:
             payload = {"offset": offset, **payload}
         return self._call("getUpdates", payload, read_timeout=timeout + 15)
 
     def set_my_commands(self, commands: list[tuple[str, str]]) -> None:
-        """Меню команд в клиенте Telegram."""
+        """Command menu in the Telegram client."""
         self._call("setMyCommands", {"commands": [{"command": c, "description": d} for c, d in commands]})
 
     def _call(self, method: str, payload: dict, read_timeout: float | None = None) -> dict:
@@ -76,8 +76,8 @@ class TelegramClient:
                 kwargs = {} if read_timeout is None else {"timeout": httpx.Timeout(read_timeout, connect=10)}
                 response = self._http.post(f"/bot{self._token}/{method}", json=payload, **kwargs)
             except httpx.HTTPError as e:
-                # в тексте сетевых ошибок httpx нет URL, так что токен сюда не попадает
-                raise TelegramError(f"{method}: Telegram недоступен: {e}") from e
+                # httpx network error text has no URL, so the token does not leak here
+                raise TelegramError(f"{method}: Telegram is unreachable: {e}") from e
             try:
                 body = response.json()
             except ValueError:
@@ -88,7 +88,7 @@ class TelegramClient:
                 return body["result"]
             retry_after = (body.get("parameters") or {}).get("retry_after")
             if response.status_code == 429 and retry_after and attempt < MAX_429_RETRIES:
-                log.warning("Telegram просит подождать %s с", retry_after)
+                log.warning("Telegram asks to wait %s s", retry_after)
                 self._sleep(retry_after)
                 continue
             raise TelegramError(f"{method}: {response.status_code} {body.get('description') or response.text[:200]}")

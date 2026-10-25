@@ -29,7 +29,7 @@ def test_unknown_types_from_api_are_guessed_by_name():
         {"id": 90002, "name": "Legion Classic", "slug": "wow-legion-classic"},
         {"id": 90003, "name": "Plunderstorm", "slug": "wow-plunderstorm"},
     ])
-    assert fmap[517] == Flavor(RETAIL, "Retail")  # известные не переопределяются
+    assert fmap[517] == Flavor(RETAIL, "Retail")  # known ones are not overridden
     assert fmap[90001] == Flavor(FOREVER, "Forever")
     assert fmap[90002] == Flavor(CLASSIC, "Legion Classic")
     assert fmap[90003] == Flavor(None, "Plunderstorm")

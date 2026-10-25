@@ -1,153 +1,155 @@
-# CurseForge → Telegram: бот новых аддонов WoW
+# CurseForge → Telegram: a bot for new WoW addons
 
-Дата: 2026-10-24 (ред. после живой проверки API в тот же день)
+Date: 2026-10-24 (revised after the live API check the same day; commands added in 0.3.0)
 
-## Цель
+## Goal
 
-Бот следит за появлением **новых** аддонов World of Warcraft на CurseForge и публикует
-каждый в один Telegram-канал/чат: название, автор, категории, поддерживаемые версии игры
-(Retail / Classic / Forever), краткое описание, ссылка и картинки (логотип + скриншоты).
+The bot watches CurseForge for **new** World of Warcraft addons and posts each one to a single
+Telegram channel/chat: name, author, categories, supported game versions
+(Retail / Classic / Forever), a short description, a link and images (logo + screenshots).
 
-Команды в личных сообщениях (добавлены в 0.3.0) — только для пользователей из
-`TELEGRAM_ADMIN_IDS`: `/status`, `/latest [N]`, `/pending`, `/flavors`, `/help`. Входящие
-сообщения забираются `getUpdates` (long polling, до 30 с) вместо сна между опросами
-CurseForge — в том же потоке; номер последнего обработанного сообщения хранится в
-`meta.tg_offset`. Фильтр из `/flavors` хранится в `meta.flavors` и перекрывает `FLAVORS`.
+Commands in private messages (since 0.3.0), for users from `TELEGRAM_ADMIN_IDS` only:
+`/status`, `/latest [N]`, `/pending`, `/flavors`, `/help`. Incoming messages are fetched with
+`getUpdates` (long polling, up to 30 s) instead of sleeping between CurseForge polls — in the
+same thread; the last processed update is stored in `meta.tg_offset`. The filter set with
+`/flavors` is stored in `meta.flavors` and overrides `FLAVORS`.
 
-Не входит в задачу: уведомления об обновлениях существующих аддонов, подписки отдельных
-пользователей, уведомления о том, что у аддона позже появилась поддержка новой версии игры.
+Out of scope: notifications about updates of existing addons, per-user subscriptions,
+notifications that an addon later gained support for another game version.
 
-## Решения
+## Decisions
 
-| Вопрос | Решение |
+| Question | Decision |
 |---|---|
-| Версии игры | Метки в каждом сообщении + фильтр в конфиге |
-| Получатели | Один канал/чат, задаётся `TELEGRAM_CHAT_ID` |
-| Хостинг | VPS / домашний сервер, постоянный процесс (Docker или systemd) |
-| Формат | Альбом: логотип + до 3 скриншотов, подпись на первой картинке |
-| Определение «нового» | Сканирование новых ID проектов (`POST /v1/mods`); новый = проект WoW с ID больше курсора, объявляется, когда его одобрили |
-| Объём | Шлём все новые аддоны, прошедшие `FLAVORS` (на 2026-10 это ~200 в сутки) |
-| Поздняя поддержка версий | Не отслеживается: метки и фильтр — на момент одобрения аддона |
+| Game versions | Labels in every message + a filter in the config |
+| Recipients | One channel/chat, set by `TELEGRAM_CHAT_ID` |
+| Hosting | Kubernetes (Helm chart, ArgoCD) or any host with Docker/systemd; a long-running process |
+| Format | Album: logo + up to 3 screenshots, caption on the first image |
+| What counts as "new" | Scanning new project ids (`POST /v1/mods`); new = a WoW project with an id above the cursor, announced once approved |
+| Volume | Every new addon that passes `FLAVORS` (about 200 a day as of 2026-10) |
+| Late version support | Not tracked: labels and filter are evaluated when the addon is approved |
 
-## Источник данных: CurseForge API
+## Data source: the CurseForge API
 
-- Базовый URL `https://api.curseforge.com`, ключ в заголовке `x-api-key`
-  (выдаётся на console.curseforge.com). WoW: `gameId=1`.
-- **Поиск `GET /v1/mods/search` ключу пользователя запрещён** (403 для любой игры), остальные
-  эндпоинты работают — поэтому поиск не используется.
-- Моды по ID: `POST /v1/mods` с `{"modIds": [...]}` (до 1000 ID за запрос) → только
-  существующие; если не нашлось ни одного — **404** (= пустой список).
-- ID проектов общие для всех игр CurseForge и растут по порядку (на 2026-10-24 максимум
-  ≈ 1 763 684; ~2 000 новых ID в сутки, из них ~200 — WoW; ~17% ID — пропуски).
-  Проекты видны сразу после создания, ещё до модерации.
-- Статусы мода: 1 New, 2 ChangesRequired, 4 Approved, 5 Rejected, 6 ChangesMade, 9 Deleted.
-  Одобрен = `status == 4` и `isAvailable == true`.
-- `Mod.dateReleased` — дата **последнего файла**, а не проекта (у DBM: создан 2008,
-  `dateReleased` — сегодня), поэтому по датам «новизну» не определяем.
-- Типы версий: `GET /v1/games/1/version-types` (подтверждено живым запросом): Retail 517,
+- Base URL `https://api.curseforge.com`, key in the `x-api-key` header
+  (issued at console.curseforge.com). WoW: `gameId=1`.
+- **Search, `GET /v1/mods/search`, is forbidden for the user's key** (403 for any game) while
+  other endpoints work, so search is not used.
+- Mods by id: `POST /v1/mods` with `{"modIds": [...]}` (up to 1000 ids per request) returns
+  only existing ones; if none exist, the answer is **404** (= an empty list).
+- Project ids are shared by all CurseForge games and grow in order (max ≈ 1 763 684 on
+  2026-10-24; ~2 000 new ids a day, ~200 of them WoW; ~17% of ids are gaps).
+  Projects are visible right after creation, before moderation.
+- Mod statuses: 1 New, 2 ChangesRequired, 4 Approved, 5 Rejected, 6 ChangesMade, 9 Deleted.
+  Approved = `status == 4` and `isAvailable == true`.
+- `Mod.dateReleased` is the date of the **latest file**, not of the project (DBM: created
+  2008, `dateReleased` today), so dates cannot tell what is new.
+- Version types: `GET /v1/games/1/version-types` (confirmed live): Retail 517,
   Classic Era 67408, TBC 73246, Wrath 73713, Titan 81212, Cata 77522, MoP 79434,
   **Forever 88568** (`'WoW Forever'`, slug `wow-forever`).
-- Используемые поля мода: `id`, `gameId`, `status`, `isAvailable`, `name`, `summary`,
+- Mod fields used: `id`, `gameId`, `status`, `isAvailable`, `name`, `summary`,
   `links.websiteUrl`, `authors[].name`, `categories[].name`, `logo.url`, `screenshots[].url`,
   `dateCreated`, `latestFilesIndexes[].gameVersionTypeId`.
 
-`scripts/probe.py` — живая проверка: таблица типов версий, текущий максимальный ID,
-статистика последних ~10 000 ID (по играм, WoW по дням, статусы, сколько с Forever).
+`scripts/probe.py` is the live check: the version-type table, the current highest id and
+statistics for the last ~10 000 ids (per game, WoW per day, statuses, how many have Forever files).
 
-## Структура
+## Layout
 
 ```
 curse_bot/
   bot/
-    config.py      — настройки из окружения (.env)
-    curseforge.py  — HTTP-клиент CurseForge: моды по ID, поиск максимального ID, version-types
-    flavors.py     — gameVersionTypeId → группа/метка, фильтр (чистые функции)
-    storage.py     — SQLite: список ожидания и курсор
-    formatter.py   — подпись и выбор картинок (чистые функции)
-    telegram.py    — отправка в Bot API с fallback и обработкой 429
-    main.py        — цикл опроса, CLI-флаги
-  scripts/probe.py — живая проверка CurseForge API
+    config.py      — settings from the environment (.env)
+    curseforge.py  — CurseForge HTTP client: mods by id, highest-id search, version types
+    flavors.py     — gameVersionTypeId → group/label, filter (pure functions)
+    storage.py     — SQLite: moderation queue, cursor, sent log, meta values
+    formatter.py   — caption and image selection (pure functions)
+    telegram.py    — Bot API: sending with fallback and 429 handling, getUpdates, setMyCommands
+    commands.py    — private-chat commands and the long-polling wait between cycles
+    main.py        — the polling loop, CLI flags
+  scripts/probe.py — live check of the CurseForge API
+  charts/curse-bot — Helm chart
   tests/
-  Dockerfile, docker-compose.yml, .env.example, README.md
+  Dockerfile, docker-compose.yml, .env.example, README.md, README.ru.md
 ```
 
-Стек: Python 3.13 (как в distroless-образе), `httpx`, `sqlite3` из стандартной библиотеки, `pytest`.
-Telegram Bot API вызывается напрямую через `httpx`, без фреймворка.
+Stack: Python 3.13 (same as the distroless image), `httpx`, `sqlite3` from the standard
+library, `pytest`. The Telegram Bot API is called directly through `httpx`, no framework.
 
-## Конфигурация
+## Configuration
 
-| Переменная | Обязательна | По умолчанию | Смысл |
+| Variable | Required | Default | Meaning |
 |---|---|---|---|
-| `CURSEFORGE_API_KEY` | да | — | ключ CurseForge |
-| `TELEGRAM_BOT_TOKEN` | да | — | токен бота |
-| `TELEGRAM_CHAT_ID` | да | — | канал/чат (бот должен быть админом канала) |
-| `FLAVORS` | нет | пусто = все | список групп через запятую: `retail,classic,forever` |
-| `POLL_INTERVAL` | нет | `600` | секунды между циклами |
-| `DB_PATH` | нет | `data/bot.db` | путь к SQLite |
-| `TELEGRAM_ADMIN_IDS` | нет | пусто | user id через запятую, кому бот отвечает на команды; пусто — команды выключены |
-| `HEARTBEAT_FILE` | нет | — | файл, который бот трогает после каждого цикла (liveness-проба); пусто — не писать |
+| `CURSEFORGE_API_KEY` | yes | — | CurseForge key |
+| `TELEGRAM_BOT_TOKEN` | yes | — | bot token |
+| `TELEGRAM_CHAT_ID` | yes | — | channel/chat (the bot must be a channel admin) |
+| `FLAVORS` | no | empty = all | comma-separated groups: `retail,classic,forever` |
+| `POLL_INTERVAL` | no | `600` | seconds between cycles |
+| `DB_PATH` | no | `data/bot.db` | SQLite path |
+| `TELEGRAM_ADMIN_IDS` | no | empty | comma-separated user ids the bot answers commands from; empty disables commands |
+| `HEARTBEAT_FILE` | no | — | file the bot touches after every cycle (liveness probe); empty means do not write |
 
-Неизвестное значение в `FLAVORS` или отсутствие обязательной переменной — ошибка при старте.
-Пустые `POLL_INTERVAL` / `DB_PATH` — значения по умолчанию. Значения с `$` (ключ CurseForge
-вида `$2a$10$…`) в `.env` нужно брать в **одинарные** кавычки, иначе `uv` и `docker compose`
-воспримут `$…` как подстановку переменных.
+An unknown `FLAVORS` value or a missing required variable is a startup error. Empty
+`POLL_INTERVAL` / `DB_PATH` fall back to the defaults. Values containing `$` (a CurseForge key
+looks like `$2a$10$…`) must be wrapped in **single** quotes in `.env`, otherwise `uv` and
+`docker compose` treat `$…` as variable substitution.
 
-## Версии игры (flavors.py)
+## Game versions (flavors.py)
 
-Группы задаются встроенной таблицей известных ID (см. выше):
+Groups come from a built-in table of known ids (see above):
 
 - **Retail** — 517;
 - **Classic** — 67408 (Era), 73246 (TBC), 73713 (Wrath), 81212 (Titan), 77522 (Cata), 79434 (MoP);
 - **Forever** — 88568.
 
-На старте дополнительно загружаются типы версий из API. Типы, которых нет в таблице,
-распознаются по имени/slug: «forever» → Forever, «classic» → Classic, иначе без группы.
-Если загрузить типы не удалось — работаем по встроенной таблице.
+At startup the version types are also loaded from the API. Types missing from the table are
+recognised by name/slug: "forever" → Forever, "classic" → Classic, otherwise no group.
+If the types cannot be loaded, the built-in table is used.
 
-Метка в сообщении: группы через ` · `, у Classic в скобках конкретные версии:
-`Retail · Classic (Era, MoP) · Forever`. Тип, не попавший ни в одну группу,
-показывается под своим именем API и логируется как `unknown version type`; фильтр
-`FLAVORS` его не пропускает, если фильтр задан. Аддон проходит фильтр, если хотя бы одна
-его группа есть в `FLAVORS`.
+The label in a message: groups joined with ` · `, Classic with its specific versions in
+parentheses: `Retail · Classic (Era, MoP) · Forever`. A type outside every group is shown
+under its API name and logged as `unknown version type`; when a filter is set, `FLAVORS`
+does not let it through. An addon passes the filter if at least one of its groups is in `FLAVORS`.
 
-## Поток данных
+## Data flow
 
-**Первый запуск** (нет курсора `next_id` в таблице `meta`): найти текущий максимальный ID
-(экспоненциальный + двоичный поиск окнами по 1000 ID), курсор = максимум + 1, ничего
-не отправлять.
+**First start** (no `next_id` cursor in the `meta` table): find the current highest id
+(exponential + binary search in windows of 1000 ids), cursor = highest + 1, send nothing.
 
-**Флаг `--send-latest N`**: разово отправить N последних одобренных аддонов WoW
-(просмотр ID назад от курсора) и завершиться; базу не трогать, фильтр не применять.
+**`--send-latest N`**: post the N latest approved WoW addons once (walking ids back from the
+cursor) and exit; the database is untouched and no filter applies.
 
-**Цикл:**
-1. Сканирование вперёд: моды с ID `[next_id, next_id+1000)`; курсор → максимальный
-   найденный ID + 1. Если окно почти заполнено (бот долго не работал) — следующее окно,
-   не больше 20 за цикл (дальше — предупреждение в лог). Найденные проекты WoW
-   (`gameId == 1`) → список ожидания `pending` (ID + время первого появления).
-2. Перепроверка списка ожидания одним запросом (по 1000 ID), по возрастанию ID; ошибка
-   в обработке одного аддона логируется и не мешает остальным (аддон остаётся в ожидании):
-   - одобрен и проходит `FLAVORS` → отправить; убрать из ожидания **только после
-     успешной отправки**;
-   - одобрен, `FLAVORS` задан, а файлов (версий) ещё нет → ждать;
-   - одобрен, но версии не проходят `FLAVORS` → убрать без отправки;
-   - отклонён / удалён (`status` 5, 9) → убрать;
-   - не одобрен (или не вернулся из API) дольше 14 дней → убрать с записью в лог.
-3. Пауза ~3 с между сообщениями, затем сон `POLL_INTERVAL`.
+**Cycle:**
+1. Forward scan: mods with ids `[next_id, next_id+1000)`; cursor → highest id found + 1.
+   If the window is almost full (the bot was down for a while), take the next window, at most
+   20 per cycle (beyond that, a warning in the log). WoW projects found (`gameId == 1`) go to
+   the `pending` queue (id + time first seen).
+2. Recheck the queue with one request (per 1000 ids), in ascending id order; an error while
+   processing one addon is logged and does not affect the others (the addon stays queued):
+   - approved and passes `FLAVORS` → post it; remove it from the queue **only after a
+     successful post**, and record it in the sent log;
+   - approved, `FLAVORS` set, but no files (versions) yet → wait;
+   - approved, but its versions do not pass `FLAVORS` → remove without posting;
+   - rejected / deleted (`status` 5, 9) → remove;
+   - not approved (or not returned by the API) for more than 14 days → remove with a log line.
+3. A ~3 s pause between messages; then wait `POLL_INTERVAL` — answering commands during the
+   wait when `TELEGRAM_ADMIN_IDS` is set, sleeping otherwise. The heartbeat file is touched
+   after every cycle.
 
-## Сообщение (formatter.py, telegram.py)
+## Message (formatter.py, telegram.py)
 
-Картинки: `logo.url` + первые 3 `screenshots[].url` (полный размер, не thumbnail),
-без дублей, максимум 4.
+Images: `logo.url` + the first 3 `screenshots[].url` (full size, not thumbnails),
+no duplicates, 4 at most.
 
-- ≥2 картинки → `sendMediaGroup`, подпись на первой;
-- 1 картинка → `sendPhoto`;
-- 0 картинок → `sendMessage`.
+- ≥2 images → `sendMediaGroup`, caption on the first;
+- 1 image → `sendPhoto`;
+- 0 images → `sendMessage`.
 
-Подпись (`parse_mode=HTML`, не длиннее 1024 символов; для `sendMessage` тот же текст):
+Caption (`parse_mode=HTML`, at most 1024 characters; `sendMessage` uses the same text):
 
 ```
-🆕 <b>Название</b>
-👤 Автор1, Автор2 · 📂 Категория1, Категория2
+🆕 <b>Name</b>
+👤 Author1, Author2 · 📂 Category1, Category2
 🎮 Retail · Classic (Era, MoP) · Forever
 
 summary
@@ -155,35 +157,41 @@ summary
 🔗 https://www.curseforge.com/wow/addons/slug
 ```
 
-Все поля из API экранируются (`html.escape`). При превышении лимита обрезается только
-`summary` (с `…`), остальные строки сохраняются.
+Every API field is escaped (`html.escape`). When over the limit, only `summary` is cut
+(with `…`); the other lines stay.
 
-## Обработка ошибок
+## Error handling
 
-| Ситуация | Поведение |
+| Situation | Behavior |
 |---|---|
-| CurseForge: сеть, таймаут, 5xx | лог, пропуск цикла; база не меняется |
-| CurseForge: 403 | лог «неверный или отозванный API-ключ», процесс продолжает работу |
-| Telegram: 429 | ждать `retry_after`, повторить (до 3 раз) |
-| Telegram: ошибка альбома (картинка не скачалась и т.п.) | fallback: `sendPhoto` с логотипом → `sendMessage` |
-| Telegram: прочие ошибки (неверный chat_id и т.п.) | лог, аддон остаётся в ожидании, повтор в следующем цикле |
-| Некорректные данные (null-поля, `data` не список, не-JSON) | `CurseForgeError` / пропуск одного аддона с `log.exception`; цикл не падает |
-| Прочие неожиданные исключения в цикле | `log.exception`, сон, следующий цикл |
-| Падение процесса | перезапуск Docker (`restart: unless-stopped`, `init: true`) / systemd; состояние в SQLite |
+| CurseForge: network, timeout, 5xx | log, skip the cycle; the database is unchanged |
+| CurseForge: 403 | log "invalid or revoked API key", the process keeps running |
+| Telegram: 429 | wait `retry_after`, retry (up to 3 times) |
+| Telegram: album failure (an image could not be fetched, etc.) | fallback: `sendPhoto` with the logo → `sendMessage` |
+| Telegram: other errors (wrong chat_id, etc.) | log, the addon stays queued, retried next cycle |
+| Telegram: `getUpdates` fails | log, pause 10 s, keep waiting |
+| Malformed data (null fields, `data` not a list, non-JSON) | `CurseForgeError` / skip one addon with `log.exception`; the loop does not crash |
+| Any other unexpected exception in the loop | `log.exception`, wait, next cycle |
+| A command fails | `log.exception`; the update offset has already moved, so it is not retried forever |
+| Process crash | restart by Kubernetes / Docker (`restart: unless-stopped`, `init: true`) / systemd; state is in SQLite |
 
-Логи — stdout, с временем и уровнем.
+Logs go to stdout with time and level. The bot token never reaches the logs: the `httpx`
+logger is raised to `WARNING`, since at `INFO` it prints request URLs, and Telegram URLs
+contain the token.
 
-## Тестирование (pytest)
+## Testing (pytest)
 
-- `flavors`: раскладка известных ID по группам; распознавание неизвестных типов по имени;
-  фильтр; формат метки; неизвестный тип.
-- `formatter`: экранирование, обрезка до 1024, выбор картинок (лого + 3 скрина,
-  без скринов, без лого, дубль лого среди скринов).
-- `curseforge`: форма запроса `POST /v1/mods`, разбиение по 1000, 404 → пусто, ошибки,
-  поиск максимального ID на модели с пропусками.
-- `storage`: список ожидания, курсор, сохранение между запусками.
-- `main` (с фейковыми клиентами): первый запуск ставит курсор и ничего не шлёт; новый
-  проект WoW ждёт одобрения и отправляется один раз; не-WoW игнорируется; догон после
-  простоя и лимит окон; отклонённые/удалённые/устаревшие убираются; фильтр `FLAVORS`;
-  при ошибке Telegram аддон повторяется в следующем цикле.
-- Ручная проверка: `scripts/probe.py` и живой прогон `--send-latest 2` в чат пользователя.
+- `flavors`: known ids map to groups; unknown types are recognised by name; filter; label
+  format; unknown type.
+- `formatter`: escaping, cutting to 1024, image selection (logo + 3 screenshots, no
+  screenshots, no logo, logo duplicated among screenshots).
+- `curseforge`: `POST /v1/mods` request shape, chunks of 1000, 404 → empty, errors,
+  highest-id search on a model with gaps.
+- `storage`: queue, cursor, sent log, persistence across restarts.
+- `main` (with fake clients): the first start sets the cursor and sends nothing; a new WoW
+  project waits for approval and is posted once; non-WoW is ignored; catch-up after downtime
+  and the window cap; rejected/deleted/stale entries are removed; the `FLAVORS` filter and its
+  `/flavors` override; on a Telegram error the addon is retried next cycle; heartbeat.
+- `commands`: access control (only admins, only private chats), every command, long polling
+  with a stored offset, survival of Telegram and command errors.
+- Manual: `scripts/probe.py` and a live `--send-latest 2` run to the user's chat.

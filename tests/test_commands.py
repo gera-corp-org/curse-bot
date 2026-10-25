@@ -53,13 +53,13 @@ def setup(*mods, cursor=None, wanted=frozenset(), updates=None, curseforge=None)
 
 
 def reply(telegram):
-    assert telegram.texts, "бот ничего не ответил"
+    assert telegram.texts, "the bot replied nothing"
     chat_id, text = telegram.texts[-1]
     assert chat_id == ADMIN
     return text
 
 
-# --- доступ ---
+# --- access ---
 
 
 def test_stranger_is_ignored_and_logged_once(caplog):
@@ -86,7 +86,7 @@ def test_non_message_updates_are_ignored():
     assert telegram.texts == []
 
 
-# --- /help, неизвестное ---
+# --- /help, unknown ---
 
 
 @pytest.mark.parametrize("text", ["/help", "/start", "привет"])
@@ -108,7 +108,7 @@ def test_unknown_command():
 def test_command_with_bot_username_suffix():
     commands, telegram, _, _ = setup(mod(1))
     commands.handle(message("/status@curse_bot"))
-    assert "Следующий id" in reply(telegram)
+    assert "Next id" in reply(telegram)
 
 
 # --- /status ---
@@ -118,8 +118,8 @@ def test_status_before_first_cycle():
     commands, telegram, _, _ = setup()
     commands.handle(message("/status"))
     answer = reply(telegram)
-    assert "ещё не было" in answer
-    assert "Ждут модерации: 0" in answer
+    assert "never" in answer
+    assert "Awaiting moderation: 0" in answer
 
 
 def test_status_after_cycles():
@@ -131,11 +131,11 @@ def test_status_after_cycles():
     clock.value = NOW + timedelta(minutes=3)
     commands.handle(message("/status"))
     answer = reply(telegram)
-    assert "3 мин назад" in answer
-    assert "Следующий id: 2" in answer
-    assert "Ждут модерации: 2" in answer
-    assert "В канал за 24 ч: 1" in answer
-    assert "Forever" in answer and "из настроек" in answer
+    assert "3 min ago" in answer
+    assert "Next id: 2" in answer
+    assert "Awaiting moderation: 2" in answer
+    assert "Sent to channel in 24 h: 1" in answer
+    assert "Forever" in answer and "from settings" in answer
 
 
 # --- /pending ---
@@ -149,18 +149,18 @@ def test_pending_lists_mods_with_status_and_age():
     storage.add_pending([5, 6, 9], NOW - timedelta(hours=3))
     commands.handle(message("/pending"))
     answer = reply(telegram)
-    assert "Ждут модерации: 3" in answer
+    assert "Awaiting moderation: 3" in answer
     assert '<a href="https://www.curseforge.com/wow/addons/soul">Soul &lt;Fragment&gt;</a>' in answer
-    assert "на модерации" in answer
-    assert "одобрен, ждёт файлов" in answer
-    assert "id 9" in answer and "нет в API" in answer
-    assert "3 ч" in answer
+    assert "in moderation" in answer
+    assert "approved, waiting for files" in answer
+    assert "id 9" in answer and "not in API" in answer
+    assert "3 h" in answer
 
 
 def test_pending_empty():
     commands, telegram, _, _ = setup(mod(1))
     commands.handle(message("/pending"))
-    assert "пуста" in reply(telegram)
+    assert "empty" in reply(telegram)
 
 
 def test_pending_truncated_to_limit():
@@ -170,18 +170,18 @@ def test_pending_truncated_to_limit():
     commands.handle(message("/pending"))
     answer = reply(telegram)
     assert answer.count("•") == 20
-    assert "и ещё 10" in answer
+    assert "and 10" in answer
 
 
 def test_pending_reports_curseforge_errors():
     class Broken(FakeCurseForge):
         def get_mods(self, ids):
-            raise CurseForgeError("CurseForge недоступен: boom")
+            raise CurseForgeError("CurseForge is unreachable: boom")
 
     commands, telegram, storage, _ = setup(cursor=5, curseforge=Broken())
     storage.add_pending([7], NOW)
     commands.handle(message("/pending"))
-    assert "недоступен" in reply(telegram)
+    assert "unreachable" in reply(telegram)
 
 
 # --- /latest ---
@@ -208,14 +208,14 @@ def test_latest_rejects_bad_count(arg):
     commands, telegram, _, _ = setup(mod(1))
     commands.handle(message(f"/latest {arg}"))
     assert telegram.private == []
-    assert "1 до 10" in reply(telegram)
+    assert "1 to 10" in reply(telegram)
 
 
 def test_latest_reports_send_failure():
     commands, telegram, _, _ = setup(mod(1))
     telegram.fail_times = 1
     commands.handle(message("/latest 1"))
-    assert "не удалось" in reply(telegram).lower()
+    assert "could not" in reply(telegram).lower()
 
 
 # --- /flavors ---
@@ -225,7 +225,7 @@ def test_flavors_shows_current():
     commands, telegram, _, _ = setup(mod(1), wanted=frozenset({RETAIL}))
     commands.handle(message("/flavors"))
     answer = reply(telegram)
-    assert "Retail" in answer and "из настроек" in answer
+    assert "Retail" in answer and "from settings" in answer
 
 
 def test_flavors_set_all_and_reset():
@@ -234,15 +234,15 @@ def test_flavors_set_all_and_reset():
 
     commands.handle(message("/flavors forever, classic"))
     assert bot.wanted() == frozenset({FOREVER, CLASSIC})
-    assert "задан командой" in reply(telegram)
+    assert "set by /flavors" in reply(telegram)
 
     commands.handle(message("/flavors all"))
     assert bot.wanted() == frozenset()
-    assert "все" in reply(telegram)
+    assert "all" in reply(telegram)
 
     commands.handle(message("/flavors reset"))
     assert bot.wanted() == frozenset({RETAIL}) and not bot.wanted_overridden()
-    assert "из настроек" in reply(telegram)
+    assert "from settings" in reply(telegram)
 
 
 def test_flavors_rejects_unknown():
@@ -252,7 +252,7 @@ def test_flavors_rejects_unknown():
     assert "wotlk" in reply(telegram)
 
 
-# --- ожидание и long polling ---
+# --- waiting and long polling ---
 
 
 def test_wait_polls_until_deadline_and_handles_updates():
@@ -260,7 +260,7 @@ def test_wait_polls_until_deadline_and_handles_updates():
     commands.wait(45)
     assert telegram.polls == [(None, 30), (42, 15)]
     assert storage.get_meta(OFFSET_KEY) == "42"
-    assert telegram.texts  # /help обработан
+    assert telegram.texts  # /help handled
 
 
 def test_wait_resumes_from_stored_offset():
@@ -272,7 +272,7 @@ def test_wait_resumes_from_stored_offset():
 
 def test_wait_survives_telegram_errors():
     commands, telegram, _, _ = setup(mod(1), updates=[TelegramError("getUpdates: 502 Bad Gateway"), []])
-    commands.wait(40)  # ошибка → пауза 10 с → ещё один опрос на оставшиеся 30 с
+    commands.wait(40)  # error -> 10 s pause -> another poll for the remaining 30 s
     assert len(telegram.polls) == 2
 
 
@@ -280,13 +280,13 @@ def test_failing_command_is_logged_and_not_retried(caplog):
     commands, telegram, storage, _ = setup(mod(1), updates=[[message("/status", update_id=7)]])
 
     def boom(_update):
-        raise RuntimeError("сломалось")
+        raise RuntimeError("broke")
 
     commands.handle = boom
     with caplog.at_level(logging.ERROR):
         commands.wait(30)
     assert storage.get_meta(OFFSET_KEY) == "8"
-    assert any("команд" in r.getMessage() for r in caplog.records)
+    assert any("command" in r.getMessage() for r in caplog.records)
 
 
 def test_register_menu_sets_commands_and_tolerates_errors():
@@ -298,4 +298,4 @@ def test_register_menu_sets_commands_and_tolerates_errors():
         raise TelegramError("setMyCommands: 400")
 
     telegram.set_my_commands = broken
-    commands.register_menu()  # не падает
+    commands.register_menu()  # does not crash

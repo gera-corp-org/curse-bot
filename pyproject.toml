@@ -1,7 +1,7 @@
 [project]
 name = "curse-bot"
 version = "0.1.0"
-description = "Уведомления о новых аддонах WoW с CurseForge в Telegram"
+description = "New World of Warcraft addons from CurseForge posted to Telegram"
 requires-python = ">=3.13"
 dependencies = ["httpx>=0.27,<1"]
 

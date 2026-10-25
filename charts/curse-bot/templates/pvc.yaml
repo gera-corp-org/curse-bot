@@ -7,9 +7,9 @@ metadata:
     {{- include "curse-bot.labels" . | nindent 4 }}
   {{- if .Values.persistence.keepOnUninstall }}
   annotations:
-    # Не удалять том с курсором ни при helm uninstall, ни при prune/удалении в ArgoCD:
-    # без него бот начнёт заново с текущего максимального id и пропустит
-    # аддоны, ожидавшие модерации.
+    # Keep the volume with the cursor through helm uninstall and ArgoCD prune/deletion:
+    # without it the bot starts over from the current highest id and misses the
+    # addons that were waiting for moderation.
     helm.sh/resource-policy: keep
     argocd.argoproj.io/sync-options: Delete=false
   {{- end }}

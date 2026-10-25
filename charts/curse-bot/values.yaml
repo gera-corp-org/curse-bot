@@ -1,10 +1,10 @@
-# Значения по умолчанию для чарта curse-bot.
+# Default values for the curse-bot chart.
 
 image:
   repository: ghcr.io/gera-corp-org/curse-bot
-  # Пусто — используется appVersion чарта (у опубликованного чарта совпадает с его версией).
+  # Empty means the chart's appVersion (for a published chart it equals the chart version).
   tag: ""
-  # Если указан (sha256:...), образ берётся по дайджесту, а tag игнорируется.
+  # When set (sha256:...), the image is pulled by digest and tag is ignored.
   digest: ""
   pullPolicy: IfNotPresent
 
@@ -13,8 +13,8 @@ imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
 
-# Реплика всегда одна: два экземпляра отправили бы каждый аддон дважды, а SQLite
-# не рассчитан на нескольких писателей, поэтому replicaCount намеренно не настраивается.
+# Always a single replica: two instances would post every addon twice, and SQLite is
+# not built for several writers, so replicaCount is deliberately not configurable.
 
 serviceAccount:
   create: true
@@ -24,7 +24,7 @@ serviceAccount:
 podAnnotations: {}
 podLabels: {}
 
-# --- безопасность (проходит Pod Security профиль restricted) ---
+# --- security (passes the Pod Security "restricted" profile) ---
 podSecurityContext:
   runAsNonRoot: true
   runAsUser: 65532
@@ -42,30 +42,30 @@ securityContext:
   capabilities:
     drop: ["ALL"]
 
-# --- настройки бота ---
+# --- bot settings ---
 config:
-  # О каких версиях WoW сообщать: retail, classic, forever через запятую; пусто — обо всех.
+  # Which WoW versions to announce: retail, classic, forever, comma-separated; empty means all.
   flavors: ""
-  # Секунд между проверками CurseForge.
+  # Seconds between CurseForge checks.
   pollInterval: 600
-  # Telegram user id, которым бот отвечает на команды (/status, /latest, /pending, /flavors)
-  # в личных сообщениях. Пусто — команды выключены. Свой id бот покажет в логе после
-  # первого сообщения ему: «сообщение от неразрешённого пользователя id=…».
+  # Telegram user ids the bot answers commands from (/status, /latest, /pending, /flavors)
+  # in private messages. Empty disables commands. The bot logs your id after your first
+  # message to it: "message from a user who is not allowed, id=…".
   adminIds: []
 
-# --- liveness по heartbeat ---
-# Бот трогает /tmp/heartbeat после каждого цикла опроса. Если файл не обновлялся
-# дольше maxAgeSeconds (пусто — 2 × pollInterval + 300), цикл считается зависшим
-# и kubelet перезапускает контейнер.
+# --- heartbeat liveness ---
+# The bot touches /tmp/heartbeat after every polling cycle. If the file is older than
+# maxAgeSeconds (empty means 2 × pollInterval + 300), the loop is considered stuck and
+# the kubelet restarts the container.
 liveness:
   enabled: true
   maxAgeSeconds: ""
   periodSeconds: 60
   failureThreshold: 3
 
-# --- сеть ---
-# Входящий трафик запрещён целиком (у бота нет портов). Исходящий — только DNS и
-# TCP 443: CurseForge, Telegram и Vault (vault-env ходит в него из того же контейнера).
+# --- network ---
+# All ingress is denied (the bot listens on no port). Egress is limited to DNS and
+# TCP 443: CurseForge, Telegram and Vault (vault-env reaches it from the same container).
 networkPolicy:
   enabled: true
   dns:
@@ -75,56 +75,56 @@ networkPolicy:
     podSelector:
       matchLabels:
         k8s-app: kube-dns
-  # Порты наружу, на любые адреса.
+  # Outbound ports, to any address.
   egressPorts:
     - port: 443
       protocol: TCP
-  # Дополнительные правила egress в формате NetworkPolicy (например, Vault на 8200).
+  # Extra egress rules in NetworkPolicy format (for example, Vault on 8200).
   extraEgress: []
 
-# Дополнительные переменные окружения (список в формате Kubernetes).
+# Extra environment variables (a list in Kubernetes format).
 extraEnv: []
 
-# --- секреты ---
-# Нужны CURSEFORGE_API_KEY, TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID. Два способа:
+# --- secrets ---
+# CURSEFORGE_API_KEY, TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are required. Two ways:
 #
-# 1) Vault через bank-vaults vault-secrets-webhook: значения подставляются прямо
-#    в окружение процесса и в Kubernetes Secret не попадают.
+# 1) Vault through the bank-vaults vault-secrets-webhook: the values are injected straight
+#    into the process environment and never land in a Kubernetes Secret.
 vault:
   enabled: true
-  # Путь к секрету в KV v2 (с /data/ в пути).
+  # Path to the secret in KV v2 (with /data/ in the path).
   secretPath: secret/data/curse-bot
-  # Переменная окружения -> ключ внутри секрета. Каждый ключ должен существовать
-  # в Vault, иначе под не запустится.
+  # Environment variable -> key inside the secret. Every key must exist in Vault,
+  # otherwise the pod does not start.
   env:
     CURSEFORGE_API_KEY: CURSEFORGE_API_KEY
     TELEGRAM_BOT_TOKEN: TELEGRAM_BOT_TOKEN
     TELEGRAM_CHAT_ID: TELEGRAM_CHAT_ID
-  # Пустые значения — используются настройки по умолчанию самого webhook.
+  # Empty values fall back to the webhook's own defaults.
   addr: ""
   role: ""
-  # Путь метода аутентификации kubernetes в Vault.
+  # Path of the kubernetes auth method in Vault.
   authPath: ""
   skipVerify: ""
-  # Перезапускать под при изменении секрета (нужен vault-secrets-reloader).
+  # Restart the pod when the secret changes (needs vault-secrets-reloader).
   reloadOnSecretChange: true
-  # Любые другие аннотации vault.security.banzaicloud.io/*.
+  # Any other vault.security.banzaicloud.io/* annotations.
   annotations: {}
 
-# 2) Готовый Secret с этими тремя ключами (используется, когда vault.enabled=false).
+# 2) An existing Secret with these three keys (used when vault.enabled=false).
 existingSecret: ""
 
-# --- хранение данных (курсор и список ожидания модерации) ---
+# --- data (the id cursor and the moderation queue) ---
 persistence:
   enabled: true
-  # Пусто — StorageClass по умолчанию.
+  # Empty means the default StorageClass.
   storageClass: ""
   accessModes:
     - ReadWriteOnce
   size: 64Mi
-  # Использовать уже существующий PVC вместо создания нового.
+  # Use an existing PVC instead of creating one.
   existingClaim: ""
-  # PVC не удаляется при helm uninstall и при удалении приложения в ArgoCD.
+  # The PVC survives helm uninstall and deletion of the ArgoCD application.
   keepOnUninstall: true
 
 resources:
@@ -134,7 +134,7 @@ resources:
     ephemeral-storage: 16Mi
   limits:
     memory: 128Mi
-    # корень только для чтения, /tmp — в памяти; лимит страхует от записи в логи без меры
+    # the root is read-only and /tmp lives in memory; the limit guards against runaway logs
     ephemeral-storage: 64Mi
 
 nodeSelector: {}

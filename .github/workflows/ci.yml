@@ -7,7 +7,7 @@ on:
   pull_request:
   workflow_dispatch:
 
-# По умолчанию — минимальные права; задачи расширяют их точечно.
+# Least privilege by default; jobs widen it only where they need to.
 permissions:
   contents: read
 
@@ -20,24 +20,24 @@ env:
 
 jobs:
   test:
-    name: Тесты
+    name: Tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # Python берётся из .python-version (3.13, как в distroless-образе).
+      # Python comes from .python-version (3.13, same as the distroless image).
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
       - run: uv sync --locked
       - run: uv run pytest -q
-      # Образ ставит зависимости из requirements.txt; он должен совпадать с uv.lock.
-      - name: requirements.txt соответствует uv.lock
+      # The image installs dependencies from requirements.txt; it must match uv.lock.
+      - name: requirements.txt matches uv.lock
         run: |
           uv export --no-dev --no-emit-project --no-header --format requirements-txt -o /tmp/requirements.txt
           diff -u requirements.txt /tmp/requirements.txt
 
   lint:
-    name: Dockerfile и Helm
+    name: Dockerfile and Helm
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -47,32 +47,32 @@ jobs:
         with:
           dockerfile: Dockerfile
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
-      - name: helm lint и рендер всех веток
+      - name: helm lint and render every branch
         run: |
           helm lint charts/curse-bot --strict
           helm template t charts/curse-bot > /dev/null
           helm template t charts/curse-bot --set vault.enabled=false --set existingSecret=s > /dev/null
           helm template t charts/curse-bot --set persistence.enabled=false > /dev/null
           helm template t charts/curse-bot --set liveness.enabled=false --set networkPolicy.enabled=false > /dev/null
-          # id из values — числа; Helm держит их как float64, и без явного %d большие id
-          # превращаются в 2.82307402e+08 (так было в 0.3.0)
+          # ids in values are numbers; Helm keeps them as float64, and without an explicit %d
+          # a large id turns into 2.82307402e+08 (that is what broke 0.3.0)
           printf 'config:\n  adminIds:\n    - 282307402\n    - 5\n' > /tmp/ids.yaml
           helm template t charts/curse-bot -f /tmp/ids.yaml | grep -q 'value: "282307402,5"'
           helm template t charts/curse-bot --set "config.adminIds={1,2}" | grep -q 'value: "1,2"'
-          # опасные конфигурации чарт обязан отказаться рендерить
+          # the chart must refuse to render unsafe configurations
           for args in "--set vault.enabled=false" \
                       "--set podSecurityContext.runAsUser=0" \
                       "--set podSecurityContext.runAsNonRoot=false" \
                       "--set securityContext.readOnlyRootFilesystem=false"; do
             # shellcheck disable=SC2086
             if helm template t charts/curse-bot $args > /dev/null 2>&1; then
-              echo "::error::чарт отрендерился с $args"
+              echo "::error::the chart rendered with $args"
               exit 1
             fi
           done
 
   image:
-    name: Образ
+    name: Image
     needs: [test, lint]
     runs-on: ubuntu-latest
     permissions:
@@ -108,7 +108,7 @@ jobs:
             type=ref,event=pr
             type=raw,value=latest,enable={{is_default_branch}}
 
-      # Финальная стадия не выполняет RUN, поэтому arm64 собирается без эмуляции QEMU.
+      # The final stage runs no RUN, so arm64 builds without QEMU emulation.
       - id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
@@ -121,13 +121,13 @@ jobs:
           build-args: VERSION=${{ steps.meta.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          # SBOM и подробное происхождение сборки прикладываются к образу в реестре.
+          # An SBOM and detailed build provenance are attached to the image in the registry.
           provenance: mode=max
           sbom: true
 
-      # Подписанная Sigstore аттестация: проверяется командой
-      #   gh attestation verify oci://ghcr.io/gera-corp-org/curse-bot:<версия> -o gera-corp-org
-      - name: Аттестация происхождения образа
+      # Sigstore-signed attestation; verify with
+      #   gh attestation verify oci://ghcr.io/gera-corp-org/curse-bot:<version> -o gera-corp-org
+      - name: Attest image provenance
         if: env.PUSH == 'true'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
@@ -135,7 +135,7 @@ jobs:
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
 
-      - name: Trivy — отчёт для GitHub Security
+      - name: Trivy report for GitHub Security
         if: env.PUSH == 'true'
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -151,9 +151,9 @@ jobs:
           sarif_file: trivy.sarif
           category: trivy-image
 
-      # Чарт выпускается только после этого шага: образ с критичной уязвимостью
-      # не дойдёт до ArgoCD.
-      - name: Trivy — критичные уязвимости останавливают сборку
+      # The chart is released only after this step, so an image with a critical
+      # vulnerability never reaches ArgoCD.
+      - name: Trivy fails the build on critical vulnerabilities
         if: env.PUSH == 'true'
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -165,10 +165,10 @@ jobs:
           skip-setup-trivy: true
 
   chart:
-    name: Чарт
+    name: Chart
     needs: image
-    # Чарт публикуется только для релизов и только после того, как образ этой версии
-    # собран: ArgoCD не увидит версию, для которой ещё нет образа.
+    # The chart is published for releases only, and only after the image of that version
+    # is built: ArgoCD never sees a version that has no image yet.
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -179,7 +179,7 @@ jobs:
         with:
           persist-credentials: false
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
-      - name: Опубликовать чарт в GHCR
+      - name: Publish the chart to GHCR
         env:
           TAG: ${{ github.ref_name }}
           REGISTRY_USER: ${{ github.actor }}
@@ -192,14 +192,14 @@ jobs:
           helm push "dist/curse-bot-${VERSION}.tgz" "$CHARTS"
 
   release:
-    name: Релиз на GitHub
+    name: GitHub release
     needs: chart
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Опубликовать релиз с автоматическими заметками
+      - name: Publish the release with generated notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}

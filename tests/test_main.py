@@ -19,7 +19,7 @@ def test_first_run_sets_baseline_and_sends_nothing(caplog):
     assert storage.pending() == {}
     assert telegram.sent == []
     assert curseforge.requests == []
-    assert "baseline: следующий id 12" in caplog.text
+    assert "baseline: next id 12" in caplog.text
 
 
 def test_new_mod_goes_pending_then_sent_once_approved():
@@ -62,7 +62,7 @@ def test_cursor_advances_and_persists():
     assert storage.get_meta("next_id") == "16"
     assert curseforge.requests[0] == list(range(11, 11 + BATCH_SIZE))
     bot.run_once()
-    assert curseforge.requests[-1] == list(range(16, 16 + BATCH_SIZE))  # без новых — курсор прежний
+    assert curseforge.requests[-1] == list(range(16, 16 + BATCH_SIZE))  # no new ones - cursor unchanged
     assert storage.get_meta("next_id") == "16"
 
 
@@ -80,7 +80,7 @@ def test_catches_up_across_several_windows():
     assert bot._telegram.names == [f"Addon {i}" for i in ids]
     assert storage.get_meta("next_id") == str(ids[-1] + 1)
     scan_requests = [r for r in curseforge.requests if len(r) == BATCH_SIZE]
-    assert len(scan_requests) == 3  # 3-е окно не добито до конца — остановились
+    assert len(scan_requests) == 3  # 3rd window not filled to the end - stopped
 
 
 def test_batch_cap_warns_and_continues_next_cycle(caplog):
@@ -175,7 +175,7 @@ def test_failed_send_stays_pending_and_is_retried():
 def test_bad_mod_does_not_block_others():
     curseforge, bot, storage = started(mod(10))
     broken = mod(12)
-    broken["authors"] = 5  # форматирование упадёт с TypeError
+    broken["authors"] = 5  # formatting will fail with TypeError
     curseforge.add(mod(11), broken, mod(13))
     bot.run_once()
     assert bot._telegram.names == ["Addon 11", "Addon 13"]
@@ -185,7 +185,7 @@ def test_bad_mod_does_not_block_others():
 def test_record_without_id_is_ignored():
     curseforge, bot, _ = started(mod(10))
     original = curseforge.get_mods
-    curseforge.get_mods = lambda ids: original(ids) + [{"name": "мусор"}, "строка"]
+    curseforge.get_mods = lambda ids: original(ids) + [{"name": "junk"}, "string"]
     curseforge.add(mod(11))
     bot.run_once()
     assert bot._telegram.names == ["Addon 11"]
@@ -197,7 +197,7 @@ def test_send_latest_collects_approved_wow_backwards_without_touching_storage():
         mod(11), mod(12), new(13), mod(14, game=432), mod(far, 88568), mod(far + 5)
     )
     telegram, storage = FakeTelegram(), Storage(":memory:")
-    bot = make_bot(curseforge, telegram, storage, wanted=frozenset({CLASSIC}))  # фильтр игнорируется
+    bot = make_bot(curseforge, telegram, storage, wanted=frozenset({CLASSIC}))  # the filter is ignored
     bot.send_latest(3)
     assert telegram.names == ["Addon 12", f"Addon {far}", f"Addon {far + 5}"]
     assert storage.get_meta("next_id") is None
@@ -229,7 +229,7 @@ def test_run_forever_survives_curseforge_errors():
         def find_max_id(self):
             calls.append(1)
             if len(calls) == 1:
-                raise CurseForgeError("CurseForge ответил 503")
+                raise CurseForgeError("CurseForge responded 503")
             return 5
 
     def sleep(seconds):
@@ -254,7 +254,7 @@ def test_run_forever_survives_unexpected_errors():
         def find_max_id(self):
             calls.append(1)
             if len(calls) == 1:
-                raise RuntimeError("неожиданно")
+                raise RuntimeError("unexpected")
             return 5
 
     def sleep(seconds):
@@ -283,8 +283,8 @@ def test_run_forever_touches_heartbeat_before_and_after_each_cycle(tmp_path):
 
     class Watching(FakeCurseForge):
         def find_max_id(self):
-            seen.append(heartbeat.exists())  # файл уже есть до первого цикла
-            raise RuntimeError("сбой цикла не должен мешать heartbeat")
+            seen.append(heartbeat.exists())  # the file exists before the first cycle
+            raise RuntimeError("a cycle failure must not interfere with heartbeat")
 
     def sleep(seconds):
         seen.append(heartbeat.stat().st_mtime_ns)

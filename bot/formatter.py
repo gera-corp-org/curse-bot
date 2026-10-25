@@ -1,19 +1,19 @@
-"""Подпись к уведомлению о новом аддоне и выбор картинок."""
+"""Caption for a new-addon notification and image selection."""
 from html import escape
 
 from bot.flavors import Flavor, format_flavors
 
-CAPTION_LIMIT = 1024  # лимит подписи к фото в Telegram
-MAX_IMAGES = 4  # логотип + до 3 скриншотов
+CAPTION_LIMIT = 1024  # Telegram photo caption limit
+MAX_IMAGES = 4  # logo + up to 3 screenshots
 
 
 def tg_len(text: str) -> int:
-    """Длина так, как её считает Telegram: в UTF-16 code units."""
+    """Length as Telegram counts it: in UTF-16 code units."""
     return len(text.encode("utf-16-le")) // 2
 
 
 def pick_images(mod: dict) -> list[str]:
-    """Логотип и первые скриншоты, без повторов, не больше MAX_IMAGES."""
+    """Logo and first screenshots, without duplicates, at most MAX_IMAGES."""
     urls: list[str] = []
     logo = (mod.get("logo") or {}).get("url")
     if logo:
@@ -56,11 +56,11 @@ def _cut(summary: str, keep: int) -> str:
 
 
 def _fit(head: str, summary: str, tail: str) -> str:
-    """Собрать подпись; если не влезает в лимит — обрезать только summary."""
+    """Build the caption; if it exceeds the limit, truncate only the summary."""
     text = _render(head, summary, tail)
     if tg_len(text) <= CAPTION_LIMIT:
         return text
-    # двоичный поиск самого длинного начала summary, которое ещё влезает
+    # binary search for the longest summary prefix that still fits
     lo, hi = 0, len(summary)
     while lo < hi:
         mid = (lo + hi + 1) // 2

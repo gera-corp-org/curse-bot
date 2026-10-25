@@ -1,4 +1,4 @@
-"""SQLite-хранилище бота: аддоны, ожидающие публикации, и служебные значения."""
+"""Bot SQLite storage: addons awaiting publication, and service values."""
 import sqlite3
 from collections.abc import Iterable
 from datetime import UTC, datetime
@@ -16,13 +16,13 @@ class Storage:
         self._db.commit()
 
     def add_pending(self, mod_ids: Iterable[int], first_seen: datetime) -> None:
-        """Поставить id в очередь на публикацию; уже ожидающие сохраняют прежний first_seen."""
+        """Queue an id for publication; ids already waiting keep their original first_seen."""
         stamp = first_seen.astimezone(UTC).isoformat()
         self._db.executemany("INSERT OR IGNORE INTO pending (mod_id, first_seen) VALUES (?, ?)", ((i, stamp) for i in mod_ids))
         self._db.commit()
 
     def pending(self) -> dict[int, datetime]:
-        """Ожидающие id → когда бот их впервые увидел (aware UTC)."""
+        """Waiting ids -> when the bot first saw them (aware UTC)."""
         rows = self._db.execute("SELECT mod_id, first_seen FROM pending ORDER BY mod_id")
         return {mod_id: datetime.fromisoformat(stamp) for mod_id, stamp in rows}
 
@@ -31,7 +31,7 @@ class Storage:
         self._db.commit()
 
     def record_sent(self, mod_id: int, at: datetime) -> None:
-        """Журнал публикаций в канал — для /status."""
+        """Log of channel publications - for /status."""
         self._db.execute("INSERT INTO sent (mod_id, sent_at) VALUES (?, ?)", (mod_id, at.astimezone(UTC).isoformat()))
         self._db.commit()
 

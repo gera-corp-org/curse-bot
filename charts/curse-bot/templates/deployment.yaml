@@ -1,11 +1,11 @@
 {{- if and (not .Values.vault.enabled) (not .Values.existingSecret) }}
-{{- fail "нужен источник секретов: vault.enabled=true или existingSecret" }}
+{{- fail "a secrets source is required: vault.enabled=true or existingSecret" }}
 {{- end }}
 {{- if or (eq (int (.Values.podSecurityContext.runAsUser | default 0)) 0) (eq (int (.Values.podSecurityContext.runAsGroup | default 0)) 0) (not .Values.podSecurityContext.runAsNonRoot) (not .Values.securityContext.runAsNonRoot) }}
-{{- fail "бот не запускается от root: podSecurityContext.runAsUser/runAsGroup должны быть ненулевыми, runAsNonRoot — true" }}
+{{- fail "the bot does not run as root: podSecurityContext.runAsUser/runAsGroup must be non-zero and runAsNonRoot true" }}
 {{- end }}
 {{- if not .Values.securityContext.readOnlyRootFilesystem }}
-{{- fail "securityContext.readOnlyRootFilesystem должен быть true" }}
+{{- fail "securityContext.readOnlyRootFilesystem must be true" }}
 {{- end }}
 {{- $heartbeatAge := .Values.liveness.maxAgeSeconds | default (add (mul 2 (int .Values.config.pollInterval)) 300) }}
 apiVersion: apps/v1
@@ -15,8 +15,8 @@ metadata:
   labels:
     {{- include "curse-bot.labels" . | nindent 4 }}
 spec:
-  # Строго один экземпляр: старый под останавливается до запуска нового,
-  # иначе на время выкатки аддоны отправлялись бы дважды.
+  # Strictly one instance: the old pod stops before the new one starts,
+  # otherwise addons would be posted twice during a rollout.
   replicas: 1
   revisionHistoryLimit: 3
   strategy:
@@ -39,7 +39,7 @@ spec:
         {{- end }}
     spec:
       serviceAccountName: {{ include "curse-bot.serviceAccountName" . }}
-      # Токен ServiceAccount нужен только vault-env для входа в Vault (auth method kubernetes).
+      # The ServiceAccount token is only needed by vault-env to log in to Vault (kubernetes auth method).
       automountServiceAccountToken: {{ .Values.vault.enabled }}
       enableServiceLinks: false
       {{- with .Values.imagePullSecrets }}
@@ -52,7 +52,7 @@ spec:
         - name: bot
           image: {{ include "curse-bot.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          # Команда задана явно: vault-secrets-webhook оборачивает её в vault-env.
+          # The command is explicit: vault-secrets-webhook wraps it in vault-env.
           command: ["python3", "-m", "bot"]
           env:
             - name: DB_PATH
@@ -66,7 +66,7 @@ spec:
             - name: POLL_INTERVAL
               value: {{ .Values.config.pollInterval | quote }}
             {{- with .Values.config.adminIds }}
-            {{- /* числа из values Helm хранит как float64: без %d большой id станет 2.82307402e+08 */}}
+            {{- /* Helm keeps numbers from values as float64: without %d a large id becomes 2.82307402e+08 */}}
             {{- $ids := list }}
             {{- range . }}
             {{- $ids = append $ids (printf "%d" (int64 .)) }}
@@ -91,8 +91,8 @@ spec:
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
           {{- if .Values.liveness.enabled }}
-          # Без shell в образе проба — сам python3: возраст heartbeat-файла.
-          # Первый цикл (baseline) успевает отметиться задолго до maxAge.
+          # The image has no shell, so the probe is python3 itself: the age of the heartbeat file.
+          # The first cycle (baseline) checks in long before maxAge.
           livenessProbe:
             exec:
               command:

@@ -1,6 +1,6 @@
 {{- if .Values.networkPolicy.enabled }}
-# Входящий трафик запрещён целиком: у бота нет портов. Исходящий — только DNS
-# и перечисленные порты (по умолчанию TCP 443: CurseForge, Telegram, Vault).
+# All ingress is denied: the bot listens on no port. Egress is limited to DNS
+# and the listed ports (TCP 443 by default: CurseForge, Telegram, Vault).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
