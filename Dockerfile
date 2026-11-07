@@ -19,7 +19,7 @@ RUN python -m compileall -q -j 0 --invalidation-mode unchecked-hash /deps /app \
 
 # ---------- final image ----------
 # distroless: no shell, package manager, pip or other tools; user nonroot (65532).
-FROM gcr.io/distroless/python3-debian13:nonroot@sha256:64e54c4b1200da244d80181d98e86fc01d73c8101f107d5baf472152d8e119a2
+FROM gcr.io/distroless/python3-debian13:nonroot@sha256:1c32c3720dc4c7f0c7dbe998737f32c200add6511eca7cec705008be488b87d6
 
 ARG VERSION=dev
 LABEL org.opencontainers.image.title="curse-bot" \
