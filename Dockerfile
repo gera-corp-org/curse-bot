@@ -4,7 +4,7 @@
 # This stage runs on the build platform: every dependency is pure Python, so one set fits
 # both amd64 and arm64, and the final stage runs no RUN and builds for arm64 without QEMU
 # emulation. Base images are pinned by digest; Dependabot keeps them current.
-FROM --platform=$BUILDPLATFORM python:3.13-slim-trixie@sha256:d98cc29d3266e535dd9da1099688d9cb3ca4753813571e071763d17725460962 AS deps
+FROM --platform=$BUILDPLATFORM python:3.15-slim-trixie@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928 AS deps
 ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /build
 # requirements.txt is an export of uv.lock (`uv export --no-dev --no-emit-project --no-header`), with hashes.
